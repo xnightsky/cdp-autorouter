@@ -1,2 +1,5 @@
 .tmp/
 data/
+node_modules/
+dist/
+.env
