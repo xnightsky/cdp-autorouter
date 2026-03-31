@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "description": "HTTP+WS autorouter between chrome-devtools-mcp and real Chrome instances",
-  "main": "./dist/index.js",
+  "main": "./dist/src/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
+    "start": "node dist/src/index.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

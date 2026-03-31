@@ -34,6 +34,16 @@ interface CreateServerOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+function isMainModule(): boolean {
+  const entryArg = process.argv[1];
+  if (!entryArg) {
+    return false;
+  }
+
+  const entryUrl = new URL(`file://${entryArg.replace(/\\/g, '/')}`);
+  return import.meta.url === entryUrl.href;
+}
+
 /**
  * Converts a full runtime instance into the API payload we want to expose.
  *
@@ -524,7 +534,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule()) {
   const server = await createAutorouterServer();
   process.stdout.write(`autorouter listening at ${server.origin}\n`);
 }
