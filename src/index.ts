@@ -8,13 +8,12 @@ import {ChildBrowserSupervisor} from './child-browser-supervisor.js';
 import {loadEnvPolicy} from './config.js';
 import {DefaultInstanceResolver} from './default-instance-resolver.js';
 import {fetchJson} from './http-client.js';
+import {createLogger} from './logger.js';
 import {RouteBindingStore} from './route-bindings.js';
 import {RuntimeRegistry} from './runtime-registry.js';
-import type {EnvPolicy, RuntimeInstance} from './types.js';
+import type {EnvPolicy, Logger, RuntimeInstance} from './types.js';
 
-/**
- * Minimal shape used from downstream `/json/version`.
- */
+/** 从下游 `/json/version` 取出的最小字段集。 */
 interface VersionResponse {
   Browser?: string;
   'Protocol-Version'?: string;
@@ -22,16 +21,21 @@ interface VersionResponse {
   [key: string]: unknown;
 }
 
-/**
- * Minimal shape used from downstream `/json/list` and `/json`.
- */
+/** 从下游 `/json/list` 和 `/json` 取出的最小字段集。 */
 interface ListTarget {
   webSocketDebuggerUrl?: string;
   [key: string]: unknown;
 }
 
+/**
+ * {@link createAutorouterServer} 接受的选项。
+ *
+ * `env` 用于测试中覆盖进程环境变量。
+ * `logger` 可注入，使测试保持静默且结果确定。
+ */
 interface CreateServerOptions {
   env?: NodeJS.ProcessEnv;
+  logger?: Logger;
 }
 
 function isMainModule(): boolean {
@@ -45,10 +49,9 @@ function isMainModule(): boolean {
 }
 
 /**
- * Converts a full runtime instance into the API payload we want to expose.
+ * 将完整运行时实例转换为对外暴露的 API 负载。
  *
- * In particular, this strips process handles and other non-serializable runtime
- * references that should never leak over HTTP.
+ * 这里会剥离进程句柄等不可序列化的运行时引用，防止其通过 HTTP 泄漏。
  */
 function serializeInstance(
   instance: RuntimeInstance,
@@ -73,9 +76,7 @@ function serializeInstance(
   };
 }
 
-/**
- * Sends a JSON response with a stable content-type.
- */
+/** 发送 JSON 响应，Content-Type 固定为 application/json。 */
 function json(
   response: http.ServerResponse,
   statusCode: number,
@@ -86,16 +87,12 @@ function json(
   response.end(JSON.stringify(payload));
 }
 
-/**
- * Sends a small structured error payload.
- */
+/** 发送小型结构化错误负载。 */
 function error(response: http.ServerResponse, statusCode: number, message: string): void {
   json(response, statusCode, {error: message});
 }
 
-/**
- * Reads and parses a JSON request body used by the Admin API.
- */
+/** 读取并解析 Admin API 使用的 JSON 请求体。 */
 function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -118,33 +115,41 @@ function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
 }
 
 /**
- * Builds the autorouter HTTP server, websocket proxy, runtime registry, and
- * shutdown hooks.
+ * 构建 autorouter HTTP 服务器、WebSocket 代理、运行时注册表和关闭钩子。
  *
- * The returned object is both the application entry point for tests and the
- * service bootstrap used by the CLI-style `node dist/index.js` start path.
+ * 返回的对象既是测试的入口点，也是 CLI 启动路径（`node dist/index.js`）使用的服务引导对象。
+ *
+ * @param options - 可选的环境变量覆盖和 logger 注入。
  */
 export async function createAutorouterServer(options: CreateServerOptions = {}) {
   const policy = loadEnvPolicy({...process.env, ...options.env});
-  const registry = new RuntimeRegistry();
-  const bindings = new RouteBindingStore();
-  const supervisor = new ChildBrowserSupervisor(registry);
-  const defaultResolver = new DefaultInstanceResolver(policy, registry);
+
+  // 使用注入的 logger，或根据 env policy 构建一个。
+  // 测试中传入 silent logger，避免断言依赖 stderr 副作用。
+  const logger = options.logger ?? createLogger({
+    level: policy.logLevel,
+    format: policy.logFormat,
+    file: policy.logFile,
+  });
+  const registry = new RuntimeRegistry(logger);
+  const bindings = new RouteBindingStore(logger);
+  const supervisor = new ChildBrowserSupervisor(registry, logger);
+  const defaultResolver = new DefaultInstanceResolver(policy, registry, logger);
   const wsServer = new WebSocketServer({noServer: true});
 
   const activeSockets = new Set<WebSocket>();
 
   /**
-   * Resolves an instance for an HTTP or WS request and ensures it is usable.
+   * 为 HTTP 或 WS 请求解析实例并确保其可用。
    *
-   * Root compat routes implicitly use the default instance. Explicit routes use
-   * the registry entry named in the path. Newly created or stopped instances are
-   * started lazily on demand.
+   * 根路径兼容路由隐式使用默认实例；显式路由使用路径中指定的注册表项。
+   * 新创建或已停止的实例会按需懒启动。
    */
   const resolveInstance = async (
     instanceId?: string,
     method: 'http' | 'ws' = 'http',
   ): Promise<RuntimeInstance> => {
+    logger.debug('resolving instance', {instanceId, method});
     let instance: RuntimeInstance;
     if (instanceId) {
       instance = registry.require(instanceId);
@@ -154,22 +159,25 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
     if (instance.status === 'created' || instance.status === 'stopped') {
       if (!instanceId && !policy.compatLazyLoadEnabled && method === 'http') {
+        logger.error('default instance lazy load disabled');
         throw new Error('Default instance lazy load is disabled.');
       }
       instance = await supervisor.start(instance);
     } else if (instance.status !== 'healthy') {
       instance = await supervisor.refresh(instance.instanceId);
       if (instance.status !== 'healthy') {
+        logger.error('instance not healthy', {instanceId: instance.instanceId, error: instance.lastError});
         throw new Error(instance.lastError || `Instance '${instance.instanceId}' is not healthy.`);
       }
     }
 
+    logger.debug('instance resolved', {instanceId: instance.instanceId, status: instance.status});
     return instance;
   };
 
   /**
-   * Rewrites the downstream browser websocket URL so clients connect back to
-   * autorouter instead of connecting directly to the real Chrome instance.
+   * 改写下游浏览器 WebSocket URL，使客户端回连到 autorouter，
+   * 而非直接连接到真实 Chrome 实例。
    */
   const rewriteVersion = (
     payload: VersionResponse,
@@ -193,7 +201,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   };
 
   /**
-   * Rewrites each target websocket URL returned by `/json/list` or `/json`.
+   * 改写 `/json/list` 或 `/json` 返回的每个目标 WebSocket URL。
    */
   const rewriteList = (
     payload: ListTarget[],
@@ -219,13 +227,16 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   };
 
   const server = http.createServer(async (request, response) => {
-    try {
-      const host = request.headers.host ?? `${policy.serverHost}:${policy.serverPort}`;
-      const url = new URL(request.url ?? '/', `http://${host}`);
-      const path = url.pathname;
-      const method = request.method ?? 'GET';
+    // 提前提取请求元数据，确保正常路径和 catch 块都能访问。
+    const host = request.headers.host ?? `${policy.serverHost}:${policy.serverPort}`;
+    const url = new URL(request.url ?? '/', `http://${host}`);
+    const path = url.pathname;
+    const method = request.method ?? 'GET';
 
-      // Admin API: returns the autorouter instance registry, not Chrome tabs.
+    try {
+      logger.debug('processing request', {method, path});
+
+      // Admin API：返回 autorouter 的实例注册表，而非 Chrome 标签页。
       if (method === 'GET' && path === '/api/instances') {
         json(
           response,
@@ -239,7 +250,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         return;
       }
 
-      // Admin API: runtime-only instance creation. Nothing here is persisted.
+      // Admin API：仅运行时创建实例，不做持久化。
       if (method === 'POST' && path === '/api/instances') {
         const body = (await readJsonBody(request)) as Partial<RuntimeInstance>;
         if (!body.instanceId || !body.mode) {
@@ -262,7 +273,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         return;
       }
 
-      // Admin API: global reclaim entry point for managed browsers.
+      // Admin API：managed 浏览器的全局回收入口。
       if (method === 'POST' && path === '/api/instances/reclaim-managed') {
         await supervisor.reclaimManaged();
         json(response, 200, {reclaimed: true});
@@ -357,7 +368,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         }
       }
 
-      // HTTP compat routes that mimic Chrome remote debugging endpoints.
+      // HTTP 兼容路由：模拟 Chrome 远程调试端点。
       const compatMatch = path.match(
         /^(?:\/instances\/([^/]+))?(\/json(?:\/version|\/list|\/protocol)?|\/json)$/,
       );
@@ -395,13 +406,14 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         return;
       }
 
+      // 无路由匹配 —— 返回结构化 404，让调用方区分"未知端点"和"实例不存在"。
+      logger.warn('route not found', {method, path});
       error(response, 404, `Route not found: ${method} ${path}`);
     } catch (requestError) {
-      error(
-        response,
-        500,
-        requestError instanceof Error ? requestError.message : String(requestError),
-      );
+      // 兜底：绝不向 HTTP 客户端泄漏堆栈跟踪。
+      const message = requestError instanceof Error ? requestError.message : String(requestError);
+      logger.error('internal error', {path, error: message});
+      error(response, 500, message);
     }
   });
 
@@ -419,28 +431,31 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         return;
       }
 
-      // Every incoming WS token must have been minted earlier by rewriteVersion
-      // or rewriteList; this is how we keep real Chrome WS URLs private.
+      // 每个入站 WS token 必须早前由 rewriteVersion 或 rewriteList 生成；
+      // 这是保持真实 Chrome WS URL 不对外暴露的关键。
       const [, rawInstanceId, kind, token] = match;
       const binding = bindings.get(token ?? '');
       if (!binding || binding.kind !== kind) {
+        logger.warn('ws token not found', {token, kind});
         socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
         socket.destroy();
         return;
       }
       if (rawInstanceId && decodeURIComponent(rawInstanceId) !== binding.instanceId) {
+        logger.warn('ws instance mismatch', {expected: binding.instanceId, received: rawInstanceId});
         socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
         socket.destroy();
         return;
       }
 
+      logger.info('ws connection', {instanceId: binding.instanceId, kind, token});
       await resolveInstance(binding.instanceId, 'ws');
 
       wsServer.handleUpgrade(request, socket, head, clientSocket => {
         const downstreamSocket = new WebSocket(binding.downstreamWsUrl);
         activeSockets.add(clientSocket);
         supervisor.trackConnection(binding.instanceId, clientSocket);
-        // Buffer early client messages until the downstream websocket is ready.
+        // 在下游 WebSocket 就绪前缓冲客户端的早期消息。
         const pendingMessages: Buffer[] = [];
 
         const dispose = () => {
@@ -478,7 +493,9 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         clientSocket.on('error', dispose);
         downstreamSocket.on('error', dispose);
       });
-    } catch {
+    } catch (upgradeError) {
+      const message = upgradeError instanceof Error ? upgradeError.message : String(upgradeError);
+      logger.error('ws upgrade error', {error: message});
       socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
       socket.destroy();
     }
@@ -493,9 +510,16 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   const origin = `http://${address.address}:${address.port}`;
 
   /**
-   * Shared shutdown path used by tests, CLI starts, and process signal hooks.
+   * 测试、CLI 启动和进程信号钩子共享的关闭路径。
+   *
+   * 顺序很重要：
+   * 1. 关闭活跃 WS socket，让客户端收到干净断开。
+   * 2. 回收 managed 浏览器进程。
+   * 3. 停止接受新的 HTTP 连接。
+   * 4. 将待写入日志刷盘。
    */
   const shutdown = async () => {
+    logger.info('shutting down');
     for (const socket of activeSockets) {
       socket.close();
     }
@@ -509,14 +533,14 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         resolve();
       });
     });
+    await logger.destroy();
   };
 
   const closeHandler = () => {
     void shutdown();
   };
 
-  // v1 covers the most common service-exit cases so managed child browsers are
-  // not left behind after local runs.
+  // v1 覆盖最常见的服务退出场景，防止本地运行后残留 managed 子浏览器。
   process.once('SIGINT', closeHandler);
   process.once('SIGTERM', closeHandler);
   process.once('beforeExit', closeHandler);
@@ -531,10 +555,17 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
     },
     policy,
     registry,
+    logger,
   };
 }
 
 if (isMainModule()) {
   const server = await createAutorouterServer();
-  process.stdout.write(`autorouter listening at ${server.origin}\n`);
+  // 使用结构化日志打印启动横幅，使其在 JSON 模式下仍可被查询。
+  server.logger.info(`autorouter listening at ${server.origin}`, {
+    host: server.policy.serverHost,
+    port: server.policy.serverPort,
+    defaultInstanceId: server.policy.defaultInstanceTemplate?.instanceId,
+    compatModeEnabled: server.policy.compatModeEnabled,
+  });
 }

@@ -1,26 +1,68 @@
 import type {ChildProcess} from 'node:child_process';
 
 /**
- * Describes how an instance reaches a real browser.
+ * autorouter logger 的级别顺序。
  *
- * - `managed`: autorouter launches and owns the browser process lifecycle.
- * - `attached`: autorouter only connects to an already running browser.
+ * `silent` 完全静默；`debug` 最详细。
+ */
+export type LogLevel = 'silent' | 'error' | 'warn' | 'info' | 'debug';
+
+/**
+ * {@link createLogger} 使用的配置。
+ */
+export interface LoggerOptions {
+  /** 最低输出级别。 */
+  level: LogLevel;
+  /** 输出风格：`pretty`（带 ANSI 颜色）或 `json`（单行 JSON）。 */
+  format: 'pretty' | 'json';
+  /** 可选日志文件的绝对或相对路径。 */
+  file?: string;
+  /** 触发轮转的文件大小上限，单位字节（默认 10 MB）。 */
+  fileMaxSize?: number;
+  /** 保留的轮转备份数量（默认 3）。 */
+  fileMaxFiles?: number;
+}
+
+/**
+ * autorouter 全局使用的最小 logger 接口。
+ *
+ * 所有实现都必须支持 `destroy()`，以便干净退出。
+ */
+export interface Logger {
+  /** 输出 error 级别日志。 */
+  error(msg: string, ctx?: Record<string, unknown>): void;
+  /** 输出 warn 级别日志。 */
+  warn(msg: string, ctx?: Record<string, unknown>): void;
+  /** 输出 info 级别日志。 */
+  info(msg: string, ctx?: Record<string, unknown>): void;
+  /** 输出 debug 级别日志。 */
+  debug(msg: string, ctx?: Record<string, unknown>): void;
+  /** 关闭并刷盘所有待写入日志。进程退出前必须调用。 */
+  destroy(): Promise<void>;
+  /** 当前 logger 配置，供测试断言使用。 */
+  options: Readonly<LoggerOptions>;
+}
+
+/**
+ * 描述实例如何连接到真实浏览器。
+ *
+ * - `managed`：autorouter 自己启动并管理浏览器进程生命周期。
+ * - `attached`：autorouter 只连接到已运行的浏览器。
  */
 export type InstanceMode = 'managed' | 'attached';
 
 /**
- * Tracks who created the in-memory instance record.
+ * 追踪内存中实例记录的创建来源。
  *
- * The source matters because the default instance can be recreated from `.env`
- * even after a runtime delete, while API-created instances disappear on restart.
+ * 来源很重要，因为默认实例可以在运行时被删除后从 `.env` 重新创建，
+ * 而 API 创建的实例在重启后会消失。
  */
 export type InstanceSource = 'env-bootstrap' | 'api-runtime';
 
 /**
- * Models the coarse-grained runtime lifecycle for a browser instance.
+ * 浏览器实例的粗粒度运行时生命周期。
  *
- * The state machine is intentionally simple for v1 so that the HTTP compat
- * layer, Admin API, and cleanup logic all share the same vocabulary.
+ * 状态机故意保持简单，让 HTTP 兼容层、Admin API 和清理逻辑共用同一套术语。
  */
 export type InstanceStatus =
   | 'created'
@@ -33,10 +75,9 @@ export type InstanceStatus =
   | 'error';
 
 /**
- * Static instance definition as stored in the in-memory registry.
+ * 内存注册表中存储的静态实例定义。
  *
- * This is the "configuration" half of an instance. Dynamic health and process
- * information live in {@link InstanceRuntimeState}.
+ * 这是实例的"配置"半部分；动态健康和进程信息存放在 {@link InstanceRuntimeState} 中。
  */
 export interface InstanceDefinition {
   instanceId: string;
@@ -52,10 +93,9 @@ export interface InstanceDefinition {
 }
 
 /**
- * Dynamic runtime state that changes while autorouter is running.
+ * autorouter 运行期间会变化的动态运行时状态。
  *
- * In particular, managed process handles and heartbeat metadata should never be
- * treated as persistent configuration.
+ * 特别注意：managed 进程句柄和心跳元数据不应被视为持久配置。
  */
 export interface InstanceRuntimeState {
   status: InstanceStatus;
@@ -70,28 +110,28 @@ export interface InstanceRuntimeState {
 }
 
 /**
- * Full in-memory instance model used by the HTTP compat layer, Admin API, and
- * supervisor logic.
+ * HTTP 兼容层、Admin API 和 supervisor 逻辑使用的完整内存实例模型。
  */
 export interface RuntimeInstance extends InstanceDefinition, InstanceRuntimeState {}
 
 /**
- * Parsed `.env` strategy used to bootstrap the service.
+ * 从 `.env` 解析出的启动策略。
  *
- * `.env` intentionally stores only global compat policy plus the default
- * instance template. Runtime-created instances stay in memory only.
+ * `.env` 有意只存全局兼容策略和默认实例模板；运行时创建的实例仅存于内存。
  */
 export interface EnvPolicy {
   compatModeEnabled: boolean;
   compatLazyLoadEnabled: boolean;
   serverHost: string;
   serverPort: number;
+  logLevel: LogLevel;
+  logFormat: 'pretty' | 'json';
+  logFile?: string;
   defaultInstanceTemplate?: Omit<InstanceDefinition, 'source'>;
 }
 
 /**
- * One temporary token that maps an external autorouter WS URL to a concrete
- * downstream Chrome WS endpoint.
+ * 一个临时 token，将外部 autorouter WS URL 映射到具体的下游 Chrome WS 端点。
  */
 export interface RouteBinding {
   token: string;

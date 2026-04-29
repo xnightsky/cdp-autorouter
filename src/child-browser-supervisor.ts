@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import {fetchJson} from './http-client.js';
 import {RuntimeRegistry} from './runtime-registry.js';
-import type {RuntimeInstance} from './types.js';
+import type {Logger, RuntimeInstance} from './types.js';
 
 interface VersionPayload {
   Browser?: string;
@@ -13,7 +13,7 @@ interface VersionPayload {
 }
 
 /**
- * Finds a free local TCP port for a managed browser instance.
+ * 为 managed 浏览器实例寻找一个可用的本地 TCP 端口。
  */
 async function findAvailablePort(): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
@@ -38,21 +38,25 @@ async function findAvailablePort(): Promise<number> {
 }
 
 /**
- * Owns browser lifecycle operations for both managed and attached instances.
+ * 负责 managed 和 attached 两种实例的浏览器生命周期操作。
  *
- * - For `attached` instances it performs health refreshes and validation only.
- * - For `managed` instances it launches, tracks, and reclaims child browser
- *   processes as well as their active websocket proxy connections.
+ * - 对 `attached` 实例仅做健康刷新和校验。
+ * - 对 `managed` 实例负责启动、跟踪和回收子浏览器进程及其 WS 代理连接。
  */
 export class ChildBrowserSupervisor {
+  /** 按实例跟踪活跃 WS 代理 socket，stop() 时可统一关闭。 */
   readonly #managedConnections = new Map<string, Set<import('ws').WebSocket>>();
 
-  constructor(private readonly registry: RuntimeRegistry) {}
+  constructor(
+    private readonly registry: RuntimeRegistry,
+    private readonly logger?: Logger,
+  ) {}
 
   /**
-   * Brings an instance into a healthy, reachable state.
+   * 将实例带入健康、可达状态。
    */
   async start(instance: RuntimeInstance): Promise<RuntimeInstance> {
+    this.logger?.info('starting instance', {instanceId: instance.instanceId, mode: instance.mode});
     if (instance.mode === 'attached') {
       if (!instance.browserUrl && !instance.wsEndpoint) {
         throw new Error(`Attached instance '${instance.instanceId}' requires browserUrl or wsEndpoint.`);
@@ -72,8 +76,7 @@ export class ChildBrowserSupervisor {
     let userDataDir = instance.userDataDir;
     let autoCreatedUserDataDir = false;
     if (!userDataDir) {
-      // Managed instances need an isolated profile directory so shutdown can
-      // clean up all state created by autorouter itself.
+      // managed 实例需要隔离的 profile 目录，以便 shutdown 时能清理 autorouter 自己创建的所有状态。
       userDataDir = path.resolve('.tmp', `${instance.instanceId}-${Date.now()}`);
       await fs.mkdir(userDataDir, {recursive: true});
       autoCreatedUserDataDir = true;
@@ -95,8 +98,7 @@ export class ChildBrowserSupervisor {
 
     const browserUrl = `http://127.0.0.1:${port}`;
 
-    // We record the child process immediately so reclaim logic can still find
-    // it even if the process exits before health checks complete.
+    // 立即记录子进程，这样即使进程在健康检查完成前退出，回收逻辑仍能定位到它。
     this.registry.update(instance.instanceId, {
       status: 'starting',
       managedProcess: child,
@@ -108,29 +110,35 @@ export class ChildBrowserSupervisor {
     });
 
     child.once('exit', (code, signal) => {
-      // Unexpected exits should mark the instance as unhealthy/error, but a
-      // deliberate reclaim flow should settle in `stopped`.
+      // 区分 deliberate reclaim（预期退出）与 crash。
       const current = this.registry.get(instance.instanceId);
       if (!current) {
         return;
       }
+      const isReclaiming = current.status === 'reclaiming';
+      this.logger?.error('managed browser exited', {
+        instanceId: instance.instanceId,
+        code,
+        signal,
+        reclaiming: isReclaiming,
+      });
       this.registry.update(instance.instanceId, {
-        status: current.status === 'reclaiming' ? 'stopped' : 'error',
-        lastError:
-          current.status === 'reclaiming'
-            ? undefined
-            : `Managed browser exited unexpectedly (code=${code}, signal=${signal}).`,
+        status: isReclaiming ? 'stopped' : 'error',
+        lastError: isReclaiming
+          ? undefined
+          : `Managed browser exited unexpectedly (code=${code}, signal=${signal}).`,
         managedProcess: undefined,
         managedProcessPid: undefined,
       });
     });
 
-    return await this.waitUntilAvailable(instance.instanceId, browserUrl);
+    const result = await this.waitUntilAvailable(instance.instanceId, browserUrl);
+    this.logger?.info('instance started', {instanceId: instance.instanceId, status: result.status});
+    return result;
   }
 
   /**
-   * Re-reads `/json/version` from the downstream browser and updates health
-   * metadata in the registry.
+   * 重新读取下游浏览器的 `/json/version` 并更新注册表中的健康元数据。
    */
   async refresh(instanceId: string): Promise<RuntimeInstance> {
     const instance = this.registry.require(instanceId);
@@ -141,6 +149,7 @@ export class ChildBrowserSupervisor {
 
     try {
       const version = await fetchJson<VersionPayload>(`${browserUrl}/json/version`);
+      this.logger?.debug('instance refreshed', {instanceId, status: 'healthy', version: version.Browser});
       return this.registry.update(instanceId, {
         status: 'healthy',
         version: version.Browser,
@@ -149,23 +158,28 @@ export class ChildBrowserSupervisor {
         lastError: undefined,
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger?.warn('instance refresh failed', {instanceId, error: message});
       return this.registry.update(instanceId, {
         status: 'unhealthy',
-        lastError: error instanceof Error ? error.message : String(error),
+        lastError: message,
       });
     }
   }
 
   /**
-   * Stops a single instance and reclaims owned resources if necessary.
+   * 停止单个实例，必要时回收其拥有的资源。
    */
   async stop(instanceId: string): Promise<void> {
+    this.logger?.info('stopping instance', {instanceId});
     const instance = this.registry.require(instanceId);
+    // 在 kill 前先标记 reclaiming，让 exit handler 知道这是预期行为。
     this.registry.update(instanceId, {status: 'reclaiming'});
     this.closeConnections(instanceId);
 
     if (instance.mode === 'managed' && instance.managedProcess) {
       await this.terminateProcess(instance.managedProcess);
+      // 只清理 autorouter 自己创建的目录，避免误删用户数据。
       if (instance.autoCreatedUserDataDir && instance.userDataDir) {
         await fs.rm(instance.userDataDir, {recursive: true, force: true});
       }
@@ -176,15 +190,18 @@ export class ChildBrowserSupervisor {
       managedProcess: undefined,
       managedProcessPid: undefined,
     });
+    this.logger?.info('instance stopped', {instanceId});
   }
 
   /**
-   * Stops every managed instance currently known to the registry.
+   * 停止注册表中当前所有 managed 实例。
    */
   async reclaimManaged(): Promise<void> {
     const managedInstances = this.registry
       .list()
       .filter(instance => instance.mode === 'managed');
+
+    this.logger?.info('reclaiming managed instances', {count: managedInstances.length});
 
     for (const instance of managedInstances) {
       await this.stop(instance.instanceId);
@@ -192,8 +209,7 @@ export class ChildBrowserSupervisor {
   }
 
   /**
-   * Registers a proxied websocket connection so stop/reclaim can close it
-   * before shutting down the managed browser.
+   * 注册一条被代理的 websocket 连接，使 stop/reclaim 能在关闭 managed 浏览器前先断开它。
    */
   trackConnection(instanceId: string, socket: import('ws').WebSocket): void {
     const connections = this.#managedConnections.get(instanceId) ?? new Set();
@@ -208,15 +224,15 @@ export class ChildBrowserSupervisor {
   }
 
   /**
-   * Service-level shutdown hook. For v1 this is equivalent to reclaiming all
-   * managed instances.
+   * 服务级关闭钩子。v1 中等价于回收所有 managed 实例。
    */
   async shutdown(): Promise<void> {
+    this.logger?.info('supervisor shutting down');
     await this.reclaimManaged();
   }
 
   /**
-   * Polls until a newly launched managed browser exposes `/json/version`.
+   * 轮询直到新启动的 managed 浏览器暴露 `/json/version`。
    */
   private async waitUntilAvailable(
     instanceId: string,
@@ -230,14 +246,16 @@ export class ChildBrowserSupervisor {
       if (refreshed.status === 'healthy') {
         return refreshed;
       }
+      // 每 250 ms 轮询一次——对快速启动够快，对下游浏览器未就绪时也不会过于频繁。
       await new Promise(resolve => setTimeout(resolve, 250));
     }
 
+    this.logger?.error('instance health check timed out', {instanceId, browserUrl});
     throw new Error(`Managed instance '${instanceId}' did not become healthy in time at ${browserUrl}.`);
   }
 
   /**
-   * Closes all proxied websocket connections associated with an instance.
+   * 关闭与某个实例关联的所有被代理 websocket 连接。
    */
   private closeConnections(instanceId: string): void {
     const connections = this.#managedConnections.get(instanceId);
@@ -252,8 +270,7 @@ export class ChildBrowserSupervisor {
   }
 
   /**
-   * Performs a best-effort graceful shutdown and falls back to SIGKILL if the
-   * browser refuses to exit promptly.
+   * 尽力优雅关闭，若浏览器拒绝及时退出则回退到 SIGKILL。
    */
   private async terminateProcess(child: ChildProcess): Promise<void> {
     if (child.exitCode !== null) {

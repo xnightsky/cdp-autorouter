@@ -1,10 +1,9 @@
 import {config as loadEnvFile} from 'dotenv';
 
-import type {EnvPolicy, InstanceMode} from './types.js';
+import type {EnvPolicy, InstanceMode, LogLevel} from './types.js';
 
 /**
- * Parses a boolean-like environment variable while keeping a deterministic
- * default for missing or empty values.
+ * 解析类布尔的环境变量，对缺失或空值给出确定性默认值。
  */
 function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
   if (value === undefined || value === '') {
@@ -15,7 +14,7 @@ function parseBoolean(value: string | undefined, defaultValue: boolean): boolean
 }
 
 /**
- * Parses a numeric environment variable with a default fallback.
+ * 解析数值型环境变量，失败时回退到默认值。
  */
 function parseNumber(value: string | undefined, defaultValue: number): number {
   if (!value) {
@@ -27,10 +26,9 @@ function parseNumber(value: string | undefined, defaultValue: number): number {
 }
 
 /**
- * Splits a command-line style argument string into individual tokens.
+ * 将命令行风格参数字符串拆分为独立 token。
  *
- * v1 keeps this intentionally simple; if quoted argument support becomes
- * necessary later, this helper is the place to improve parsing behavior.
+ * v1 保持简单；如需支持引号参数，后续应在此改进解析行为。
  */
 function parseArgs(value: string | undefined): string[] {
   if (!value) {
@@ -44,12 +42,11 @@ function parseArgs(value: string | undefined): string[] {
 }
 
 /**
- * Loads autorouter startup policy from `.env`, then overlays explicit runtime
- * overrides such as tests or launch-time injections.
+ * 从 `.env` 加载启动策略，再叠加显式运行时覆盖（如测试注入）。
  *
- * The merge order is important:
- * 1. `.env` establishes local defaults for real runs
- * 2. explicit overrides win in tests and embedded scenarios
+ * 合并顺序很重要：
+ * 1. `.env` 提供真实运行的本地默认值
+ * 2. 显式覆盖在测试和嵌入场景中优先
  */
 export function loadEnvPolicy(
   overrides: NodeJS.ProcessEnv = {},
@@ -66,7 +63,7 @@ export function loadEnvPolicy(
 
   const defaultInstanceTemplate = defaultInstanceId
     ? {
-        // The default instance is the one exposed through root compat routes.
+        // 默认实例是通过根路径兼容路由暴露的实例。
         instanceId: defaultInstanceId,
         mode: defaultMode,
         browserUrl: env.DEFAULT_INSTANCE_BROWSER_URL?.trim() || undefined,
@@ -81,13 +78,25 @@ export function loadEnvPolicy(
       }
     : undefined;
 
+  // 解析日志配置，并做安全回退，避免坏值导致服务启动崩溃。
+  const rawLogLevel = env.LOG_LEVEL?.trim().toLowerCase() || 'info';
+  const validLevels: LogLevel[] = ['silent', 'error', 'warn', 'info', 'debug'];
+  const logLevel: LogLevel = validLevels.includes(rawLogLevel as LogLevel)
+    ? (rawLogLevel as LogLevel)
+    : 'info';
+
+  const rawLogFormat = env.LOG_FORMAT?.trim().toLowerCase() || 'pretty';
+  const logFormat: 'pretty' | 'json' = rawLogFormat === 'json' ? 'json' : 'pretty';
+
   return {
-    // These flags control whether root compat routes are available at all and
-    // whether they are allowed to bootstrap the default instance on first use.
+    // 这两个标志控制根路径兼容路由是否可用，以及是否允许在首次使用时懒加载默认实例。
     compatModeEnabled: parseBoolean(env.COMPAT_MODE_ENABLED, true),
     compatLazyLoadEnabled: parseBoolean(env.COMPAT_LAZY_LOAD_ENABLED, true),
     serverHost: env.SERVER_HOST?.trim() || '127.0.0.1',
     serverPort: parseNumber(env.SERVER_PORT, 3100),
+    logLevel,
+    logFormat,
+    logFile: env.LOG_FILE?.trim() || undefined,
     defaultInstanceTemplate,
   };
 }

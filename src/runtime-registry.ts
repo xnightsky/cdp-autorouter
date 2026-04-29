@@ -1,17 +1,17 @@
-import type {InstanceDefinition, RuntimeInstance} from './types.js';
+import type {InstanceDefinition, Logger, RuntimeInstance} from './types.js';
 
 /**
- * In-memory source of truth for all instances known to autorouter.
+ * autorouter 所有已知实例的内存唯一真相源。
  *
- * The registry deliberately does not persist anything to disk. That keeps the
- * v1 data model simple and matches the agreed contract that Admin API changes
- * are runtime-only.
+ * 注册表刻意不持久化到磁盘，保持 v1 数据模型简单，并契合 Admin API 变更仅运行时生效的约定。
  */
 export class RuntimeRegistry {
   readonly #instances = new Map<string, RuntimeInstance>();
 
+  constructor(private readonly logger?: Logger) {}
+
   /**
-   * Creates a new runtime instance with the minimum initialized state.
+   * 以最小初始化状态创建新的运行时实例。
    */
   create(definition: InstanceDefinition): RuntimeInstance {
     if (this.#instances.has(definition.instanceId)) {
@@ -25,19 +25,19 @@ export class RuntimeRegistry {
     };
 
     this.#instances.set(instance.instanceId, instance);
+    this.logger?.info('instance created', {instanceId: instance.instanceId, mode: instance.mode});
     return instance;
   }
 
   /**
-   * Returns an instance if present, otherwise undefined.
+   * 若实例存在则返回，否则返回 undefined。
    */
   get(instanceId: string): RuntimeInstance | undefined {
     return this.#instances.get(instanceId);
   }
 
   /**
-   * Returns instances in a stable order so API responses and tests stay
-   * deterministic.
+   * 以稳定顺序返回实例，使 API 响应和测试结果保持确定性。
    */
   list(): RuntimeInstance[] {
     return [...this.#instances.values()].sort((left, right) => {
@@ -46,7 +46,9 @@ export class RuntimeRegistry {
   }
 
   /**
-   * Applies a partial runtime patch while protecting immutable identity fields.
+   * 应用部分运行时补丁，同时保护不可变的身份字段。
+   *
+   * `instanceId` 和 `source` 始终被保留，防止调用方意外改写记录身份。
    */
   update(
     instanceId: string,
@@ -64,16 +66,16 @@ export class RuntimeRegistry {
   }
 
   /**
-   * Deletes the instance from the registry. Callers are responsible for cleanup
-   * before removal if the instance still owns live resources.
+   * 从注册表中删除实例。
+   * 若实例仍持有活跃资源，调用方应在删除前负责清理。
    */
   delete(instanceId: string): void {
     this.#instances.delete(instanceId);
+    this.logger?.info('instance deleted', {instanceId});
   }
 
   /**
-   * Variant of {@link get} that throws a descriptive error for API and routing
-   * code paths where absence is exceptional.
+   * {@link get} 的变体：当实例缺失时抛出描述性错误，用于 API 和路由中缺失即异常的场景。
    */
   require(instanceId: string): RuntimeInstance {
     const instance = this.get(instanceId);
