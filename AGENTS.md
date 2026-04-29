@@ -20,6 +20,7 @@
 - `docs/chrome-devtools-mcp-architecture.md`
 - `docs/autorouter-architecture.md`
 - `docs/api-design.md`
+- `docs/roadmap.md`
 
 如果实现与文档冲突，先判断：
 
@@ -160,14 +161,17 @@ npm test
 npm run build
 ```
 
-## 7. 当前已知缺口
+## 7. 路线图与已知缺口
 
-以下能力目前还不完整，后续 agent 修改时要有心理预期：
+完整路线图见 `docs/roadmap.md`，按 P0-P6 分层推进。
+
+当前已知缺口（对应路线图 D-1 到 D-5）：
 
 - `extensions` 目前还是占位返回
 - `wsEndpoint-only` 的完整健康检查和 metadata 刷新还没补齐
 - `uncaughtException` / `unhandledRejection` 的回收钩子还没接
 - 还没有真实 `chrome-devtools-mcp` 对接的集成脚本
+- `src/index.ts` 体积过大，路由/Admin API/WS upgrade 待拆分
 
 如果要补这些能力，先保持现有测试继续通过，再新增测试覆盖。
 
