@@ -1,151 +1,108 @@
+**始终使用简体中文回答**
+**输出标记（canary）**：每次回复末尾必须附带一行 `[by=chrome-devtools-mcp-autorouter]`。
+
 # AGENTS.md
 
-本文件定义在 `chrome-devtools-mcp-autorouter` 仓库内工作的 agent 约束与项目上下文。
+本文件定义 agent 在 `chrome-devtools-mcp-autorouter` 仓库内工作的约束与上下文。
 
-## 1. 项目定位
+## 顶层通用规则
 
-当前项目不是 `chrome-devtools-mcp` 的替代品，而是插在它与真实 Chrome 实例之间的一层 `HTTP + WS` 代理。
+### 输出与沟通
 
-固定主链：
+- 探索、编码、验证前先说目标；完成后说已验证、未验证及剩余风险。
+- 发现边界/设计/阶段冲突或全局一致性风险，第一时间用 `**[冲突提示]**` 高亮，写清冲突点、影响范围、建议停点、是否需更新计划。禁止积压。
+
+### 执行与风险控制
+
+- 子命令用 `(cd dir && command)`；Windows 下 Git Bash 失败时切 PowerShell 或 `cmd /c`。
+- 先搜索缩小范围再展开；Git Bash 用 `grep -rn`，PowerShell 用 `Select-String`。
+- 未知代码不碰：只处理本会话负责的改动。
+- 禁止空 `catch {}`；TS 用 `catch (err: unknown)` 收窄后处理。
+- 注释写"为什么"，不复述代码；代码注释英文，文档说明用简体中文。
+- 对外接口变更同步维护 JSDoc。
+
+### Git 限制
+
+- 未经允许禁止 `git add/commit/push`。
+- 禁止全仓回滚（`restore .`、`reset --hard`、`clean -fd*`），只允许逐文件逐块回滚且明确范围。
+- 未知 `??` 文件只汇报不删，确认来源后才逐文件处理。
+
+### 搜索参考
+
+```bash
+# 查找 AGENTS.*.md
+find . \( -type f -o -type l \) -name 'AGENTS.*.md'
+
+# 在 src/ 中搜索关键词
+grep -rn "关键词" src/
+
+# 在 src/ 下匹配文件
+find src/ -name "*.ts" | grep "pattern"
+```
+
+### 修改后质量检查
+
+- 改 `src/` 或 `tests/` 下的 `.ts` 后：先 `npm run build`（tsc strict），再 `npm test`（vitest）。
+- `.md`/`.json`/`.env` 不触发。项目无 Prettier/ESLint，风格自保持。
+
+### 计划与工作区
+
+- 跨模块/多阶段/高风险/超 30min → 先写计划到 `docs/plans/<topic>.md`，执行中持续回写。
+- `docs/plans/` 不提交 git；可提文件不得引用该目录或 `.tmp/` 等忽略路径。
+- 新建 worktree 后 `npm install` 确保环境就绪。
+
+---
+
+## 项目特定规则
+
+### 1. 项目定位
 
 `chrome-devtools-mcp -> autorouter(HTTP+WS) -> real Chrome instance`
 
-这条主链是本仓库最重要的架构前提。后续所有实现都必须围绕它展开，不能退化成“只做 HTTP”或者“只做 Admin API”的项目。
+本仓库是 HTTP+WS 代理层，不是 chrome-devtools-mcp 替代品。所有实现围绕这条主链展开。
 
-## 2. 设计与实现的事实来源
+### 2. 设计事实来源
 
-在修改代码前，优先以这些文件为准：
+设计稿优先于代码：`README.md`、`docs/chrome-devtools-mcp-architecture.md`、`docs/autorouter-architecture.md`、`docs/api-design.md`、`docs/roadmap.md`。偏离需明确说明。
 
-- `README.md`
-- `docs/chrome-devtools-mcp-architecture.md`
-- `docs/autorouter-architecture.md`
-- `docs/api-design.md`
-- `docs/roadmap.md`
+### 3. v1 硬规则
 
-如果实现与文档冲突，先判断：
+**HTTP + WS 接管**：autorouter 同时提供 HTTP 兼容层和 WS/CDP 转发；`webSocketDebuggerUrl` 必须改写；真实 Chrome WS 地址不直接暴露。
 
-1. 是实现落后于已确认设计
-2. 还是文档已经过期
+**根路径 = 默认实例**：`/json/version`、`/json/list`、`/json`、`/json/protocol` 只表示默认实例，不做多实例聚合。
 
-不要在没有说明的情况下静默偏离设计稿。
+**显式路径 = 多实例入口**：`/instances/{id}/json/*`、`/instances/{id}/devtools/*`，不回落默认实例。
 
-## 3. 当前 v1 已确定的硬规则
+**`.env` 是模板不是数据库**：仅存 compat/lazy-load 开关、默认实例 ID 及启动模板。运行期数据在内存注册表。
 
-### 3.1 HTTP + WS 都必须由 autorouter 接管
+**Admin API vs Chrome list**：`GET /api/instances` 返回 autorouter 管理的实例；`GET /json/list` 返回某 Chrome 下的 targets。不混淆。
 
-- `autorouter` 必须同时提供 HTTP 兼容层和 WS/CDP 转发层
-- `webSocketDebuggerUrl` 必须由 autorouter 改写并对外签发
-- 真实 Chrome 的 WS 地址不得直接暴露给调用方
+**回收边界**：只有 `managed` 实例允许 autorouter 启动/停止/回收；`attached` 只连接代理，不杀外部浏览器。
 
-### 3.2 根路径只表示默认兼容实例
+### 4. 代码结构
 
-- `/json/version`
-- `/json/list`
-- `/json`
-- `/json/protocol`
+| 模块 | 职责 |
+|------|------|
+| `src/config.ts` | `.env` 解析、策略与模板 |
+| `src/runtime-registry.ts` | 内存实例注册表 |
+| `src/default-instance-resolver.ts` | 根路径默认实例解析与懒注入 |
+| `src/child-browser-supervisor.ts` | managed/attached 启动、刷新、停止、回收 |
+| `src/route-bindings.ts` | 外部 WS token → 下游真实 WS 映射 |
+| `src/index.ts` | HTTP server、compat routes、Admin API、WS upgrade |
 
-这些根路径接口始终只表示默认实例，不做多实例聚合。
+新增功能优先扩展现有边界，不继续堆进 `src/index.ts`。
 
-### 3.3 显式实例路径是多实例入口
+### 5. 编码约束
 
-显式实例路径固定为：
+- 优先最小可验证改动，保持 KISS，不预埋多余抽象。
+- 不把 v1 内存模型过早升级为数据库模型。
+- Compat 层报错明确；不在路由失败时静默 fallback；对默认实例缺失/实例不存在/不健康/WS token 无效等返回可诊断错误。
 
-- `/instances/{instanceId}/json/*`
-- `/instances/{instanceId}/devtools/*`
+### 6. 测试约定
 
-所有显式实例路由都必须只命中对应实例，不能回落到默认实例。
+框架：`vitest`。关键测试：`tests/config.test.ts`、`tests/http-compat.test.ts`。
 
-### 3.4 `.env` 只存策略和默认实例模板
-
-`.env` 第一版不是实例数据库。
-
-它只负责：
-
-- compat 开关
-- lazy-load 开关
-- 默认实例 ID
-- 默认实例启动/连接模板
-
-运行期实例数据由内存注册表维护，不做落盘。
-
-### 3.5 Admin API 管理的是“实例”，不是 Chrome 页面
-
-必须始终区分：
-
-- `GET /api/instances`
-  - 返回 autorouter 管理的实例列表
-- `GET /json/list`
-  - 返回某个真实 Chrome 实例下的 targets/pages
-
-不要混淆两者语义。
-
-### 3.6 只有 `managed` 实例允许被 autorouter 回收
-
-- `managed`
-  - autorouter 启动、登记、停止、回收
-- `attached`
-  - autorouter 只连接和代理，不杀外部浏览器
-
-退出钩子和 `reclaim-managed` 只能影响 `managed` 实例。
-
-## 4. 代码结构约定
-
-当前核心模块职责如下：
-
-- `src/config.ts`
-  - 解析 `.env` 策略和默认实例模板
-- `src/runtime-registry.ts`
-  - 内存实例注册表
-- `src/default-instance-resolver.ts`
-  - 根路径默认实例解析与懒注入
-- `src/child-browser-supervisor.ts`
-  - `managed`/`attached` 实例启动、刷新、停止、回收
-- `src/route-bindings.ts`
-  - 外部 WS token 到下游真实 WS 的映射
-- `src/index.ts`
-  - HTTP server、compat routes、Admin API、WS upgrade 入口
-
-新增功能时优先扩展现有边界，不要把所有逻辑继续堆进 `src/index.ts`。
-
-## 5. 编码约束
-
-### 5.1 注释语言
-
-- 代码注释统一使用英文
-- 文档和与用户的说明统一使用简体中文
-
-### 5.2 改动风格
-
-- 优先最小可验证改动
-- 保持 KISS
-- 不预埋未被当前设计需要的抽象
-- 不把 v1 的运行期内存模型过早升级成数据库模型
-
-### 5.3 错误处理
-
-- Compat 层报错要明确
-- 不要在路由失败时静默 fallback 到别的实例
-- 对默认实例缺失、实例不存在、实例不健康、WS token 无效等情况，返回可诊断错误
-
-## 6. 测试约定
-
-当前测试框架：
-
-- `vitest`
-
-当前关键测试文件：
-
-- `tests/config.test.ts`
-- `tests/http-compat.test.ts`
-
-在修改以下能力时，必须补或改测试：
-
-- `.env` 加载逻辑
-- 默认实例懒加载
-- `/json/version` 改写
-- `/json/list` 与 `GET /api/instances` 语义边界
-- WS 代理行为
-- `managed` 浏览器回收
+改以下能力时必须补/改测试：`.env` 加载、默认实例懒加载、`/json/version` 改写、`/json/list` 与 `GET /api/instances` 边界、WS 代理、managed 回收。
 
 常用命令：
 
@@ -154,35 +111,30 @@ npm test
 npm run build
 ```
 
-在声称“完成”之前，至少重新跑：
+### 7. 提交信息规范
 
-```bash
-npm test
-npm run build
-```
+前缀：`feat:` `fix:` `docs:` `style:` `refactor:` `perf:` `test:` `chore:` `revert:`；按需 `unfinish:` `deprecated:`。不混入无关改动。
 
-## 7. 路线图与已知缺口
+### 8. 提交前检查
 
-完整路线图见 `docs/roadmap.md`，按 P0-P6 分层推进。
-
-当前已知缺口（对应路线图 D-1 到 D-5）：
-
-- `extensions` 目前还是占位返回
-- `wsEndpoint-only` 的完整健康检查和 metadata 刷新还没补齐
-- `uncaughtException` / `unhandledRejection` 的回收钩子还没接
-- 还没有真实 `chrome-devtools-mcp` 对接的集成脚本
-- `src/index.ts` 体积过大，路由/Admin API/WS upgrade 待拆分
-
-如果要补这些能力，先保持现有测试继续通过，再新增测试覆盖。
-
-## 8. 提交前检查
-
-如果你改了实现代码，结束前至少确认：
+改实现代码后确认：
 
 1. `npm test` 通过
 2. `npm run build` 通过
-3. 根路径 compat 语义没有被破坏
-4. `GET /api/instances` 没有被做成 Chrome target list
-5. `managed` 和 `attached` 的回收边界没有混掉
+3. 根路径 compat 语义完好
+4. `GET /api/instances` 未被做成 Chrome target list
+5. `managed` / `attached` 回收边界未混淆
 
-如果你改了文档，也要确保文档描述与当前代码行为一致。
+改文档后确保描述与代码行为一致。
+
+### 9. 路线图与已知缺口
+
+完整路线图见 `docs/roadmap.md`（P0-P6）。当前缺口：
+
+- `extensions` 占位返回
+- `wsEndpoint-only` 健康检查/metadata 刷新未补齐
+- 未接 `uncaughtException`/`unhandledRejection` 回收钩子
+- 无真实 chrome-devtools-mcp 集成脚本
+- `src/index.ts` 过大待拆分
+
+补能力时先保持已有测试通过，再新增覆盖。
