@@ -19,7 +19,8 @@
 
 - `GET /api/instances`：列出 autorouter 自己管理的实例（Default + API 生成），配置来自 `.env` 或运行期操作，响应代表的是“autorouter 眼中的实例注册表”，便于调度、健康检查与回收；  
 - `GET /json/list`：代表某个实例（默认或显式）对应的真实 Chrome 下的 targets/pages，返回的是标准的 DevTools target 列表，与 Admin API 的实例登记无关，只依赖当前页面/目标的 `wsEndpoint`；其内容会被 upstream 如 `chrome-devtools-mcp` 继续消费。  
-- `POST /api/instances` / `PATCH` / `DELETE`：在注册表里新增/修改/删除实例定义，但不直接操纵 Chrome 进程，实际的启动与停止通过 `POST /api/instances/{instanceId}/start` / `stop` 实现；  
+- `POST /api/instances` / `PATCH` / `DELETE`：在注册表里新增/修改/删除实例定义，但不直接操纵 Chrome 进程，实际的启动与停止通过 `POST /api/instances/{instanceId}/start` / `stop` 实现；
+- **`instanceId` 由调用方在 POST body 中显式指定**（任意字符串，如 `"my-chrome"`、`"prod-instance"`），不采用服务端自增计数器。这是与对照 repo（`chrome-cdp-autorouter`）的关键设计差异：对照 repo 使用 `nextInstanceId++` 强制递增（`instance1 → 2 → 3`），调用方无法自定义 ID，且可预测的自增序列存在 IDOR 枚举风险。当前设计遵循 ADP-314 建议（`SHOULD NOT use incrementing integers as id generation logic`），将 ID 控制权完全交给调用方；  
 - `POST /api/instances/reclaim-managed`：统一回收当前所有 `mode=managed` 的浏览器，走 `reclaiming -> stop -> kill -> cleanup` 流程，期间会拒绝新的 HTTP/WS 请求；  
 - `GET /api/instances/{instanceId}/health`、`/refresh`、`/extensions`：提供运行时健康、协议元数据与扩展摘要，所有数据都是从对应实例的 `wsEndpoint` 上游采集的，不写盘。
 

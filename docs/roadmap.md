@@ -79,6 +79,21 @@
 | P3-2 | **MCP 包装器 CLI** | `chrome-cdp-autorouter-mcp` bin 入口，内部 `spawn('npx', ['chrome-devtools-mcp@latest', ...])` | 作为 `bin` 字段独立可执行；支持 `--autorouter-url` 指定 autorouter 地址；自动检测 autorouter 版本与能力；透传所有 chrome-devtools-mcp 参数 |
 | P3-3 | **autorouter skill 感知端点** | 无 | 在 `/json/version` 附加字段让 chrome-devtools-ext-autorouter skill 自动检测；支持 `OPTIONS /api/capabilities` 返回允许的操作集合 |
 
+### P3.5 — CLI 控制面 + Skill 一体化（新增，对标对照 repo 的 CLI 体系 + Skill 设计）
+
+对照 repo 有 CLI 但只管启动/验证，控制面操作仍靠 `curl` 手动拼 JSON。当前 Skill 文件（`chrome-devtools-ext-autorouter`）写的是对照 repo 的旧 API 路径和端口，与当前实现不一致。
+
+这一层把 CLI 和 Skill 作为"同一份控制面能力的两种消费形态"一并设计：CLI 给人用，Skill 给 agent 用，底层共享同一套 Admin API 语义。
+
+| # | 能力 | 对照 repo 现状 | 当前要做得更好的方向 |
+|---|------|--------------|---------------------|
+| P3.5-1 | **CLI 实例管理子命令** | 无，控制面靠手动 curl | `autorouter instance <create|list|get|start|stop|restart|switch|delete>` 子命令族；`--json` 输出模式供脚本消费；`--instance-id`、`--mode`、`--browser-url` 等 flag；命令失败时返回结构化错误信息和修复建议 |
+| P3.5-2 | **CLI 服务启动入口整合** | `cli/start.js`：`--config` + 启动 | 合并当前 `node dist/index.js` 入口，增加 `autorouter start --port --host --log-level --log-format`；启动打印实例摘要（监听地址、默认实例、compat 状态）；支持 `--detach` 后台运行 |
+| P3.5-3 | **CLI 健康验证** | `cli/verify.js`：5 步检查 | 增强为 7 步：增加 WS 代理连通性、默认实例懒加载验证；`--json` 输出；失败给出修复建议；与 P0-4 合并实现 |
+| P3.5-4 | **Skill 重写对齐当前 API** | Skill 引用旧端口 9223、旧路径 `/instanceN`、旧响应格式 | 重写 `chrome-devtools-ext-autorouter` skill：更新为当前端口（3100）、当前路径（`/instances/{instanceId}/json/*`）、当前 Admin API 请求体格式（`{"instanceId": "...", "mode": "..."}`）；Skill 优先引导 agent 使用 CLI 子命令（`autorouter instance create ...`），无 CLI 时降级为 `curl` |
+| P3.5-5 | **Skill 自动感知 + CLI 发现** | 无 | `/json/version` 注入 `autorouter` 元数据字段（name、version、cliAvailable、defaultInstanceId）；Skill 首次调用即可判断 autorouter 版本并选择对应的操作路径；CLI 启动时打印 Skill 安装提示 |
+| P3.5-6 | **CLI 作为 MCP tool 暴露**（可选） | 无 | 将 CLI 实例管理能力封装为 MCP tool，让 agent 通过 MCP 协议直接调用 `create_instance`/`stop_instance`/`switch_instance`，无需绕道 `bash + curl` |
+
 ### P4 — 安全性增强（当前 repo 已有 WS token 隔离，继续加固）
 
 这些是在对照 repo 基础上"做得更好"的核心差异点。
@@ -152,6 +167,18 @@ P4-1  WS Token 过期与轮换
 P4-2  WS 并发连接限流
 ```
 
+### Phase 3.5：CLI 控制面 + Skill 一体化（新增 P3.5）
+
+**目标**：让人和 agent 都能高效操作 autorouter 控制面，不再依赖手动 curl。
+
+```
+P3.5-1  CLI 实例管理子命令
+P3.5-2  CLI 服务启动入口整合
+P3.5-3  CLI 健康验证
+P3.5-4  Skill 重写对齐当前 API
+P3.5-5  Skill 自动感知 + CLI 发现
+```
+
 ### Phase 4：MCP 集成 + 可观测性（预计 P3 + P5）
 
 **目标**：与 chrome-devtools-mcp 无缝对接，可运维。
@@ -187,11 +214,12 @@ P6-5  CHANGELOG.md
 | **类型安全** | JS + JSDoc | ✅ **TypeScript strict mode** |
 | **测试** | 无可见测试 | ✅ **vitest + MockChromeServer** |
 | **架构文档** | README 草图 | ✅ **3 份设计稿 + Mermaid 图** |
-| **CLI 工具链** | ✅ start/mcp/config-init/verify | ❌ 缺失 |
+| **CLI + Skill 控制面** | ⚠️ CLI 只管启动，控制面靠 curl；Skill 与当前 API 不一致 | ✅ **新增 P3.5：CLI 实例管理子命令 + Skill 重写对齐 + agent 自动感知** |
 | **日志系统** | ✅ 文件 + 控制台 + ANSI | ❌ 缺失 |
 | **反代支持** | ✅ x-forwarded-* | ❌ 缺失 |
 | **能力发现** | ✅ /api/capabilities | ❌ 缺失 |
 | **MCP 适配器** | ✅ browserUrl → wsEndpoint 升级 | ❌ 缺失 |
+| **实例 ID 控制权** | ❌ `nextInstanceId++` 强制递增，调用方无法自定义 | ✅ **调用方在 POST body 中指定任意字符串 `instanceId`**，无顺序约束，符合 ADP-314 规范 |
 | **devtoolsFrontendUrl 重写** | ✅ | ❌ 缺失 |
 | **实例切换** | ✅ switch API | ❌ 缺失 |
 | **实例重启** | ✅ restart API | ❌ 缺失 |
