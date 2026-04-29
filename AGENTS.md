@@ -27,18 +27,13 @@
 - 禁止全仓回滚（`restore .`、`reset --hard`、`clean -fd*`），只允许逐文件逐块回滚且明确范围。
 - 未知 `??` 文件只汇报不删，确认来源后才逐文件处理。
 
-### 搜索参考
+### 搜索与文档感知
 
-```bash
-# 查找 AGENTS.*.md
-find . \( -type f -o -type l \) -name 'AGENTS.*.md'
-
-# 在 src/ 中搜索关键词
-grep -rn "关键词" src/
-
-# 在 src/ 下匹配文件
-find src/ -name "*.ts" | grep "pattern"
-```
+- 会话开始时，先搜索并读取所有 `AGENTS.*.md` 文档。
+- 文件发现命令优先级：
+  - 首选：`(cd repo && rg --files -uu -L -g 'AGENTS.*.md' .)`
+  - 备选：`(cd repo && fd -HI 'AGENTS\\..*\\.md' .)`
+  - 兜底：`(cd repo && find . \\( -type f -o -type l \\) -name 'AGENTS.*.md')`
 
 ### 修改后质量检查
 

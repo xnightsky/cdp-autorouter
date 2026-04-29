@@ -3,3 +3,7 @@ data/
 node_modules/
 dist/
 .env
+
+
+# ai
+AGENTS.local.md
