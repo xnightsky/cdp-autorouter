@@ -347,4 +347,39 @@ describe('HTTP compat proxy', () => {
     const caps = (await capsRes.json()) as {runtime: {defaultInstanceId: string}};
     expect(caps.runtime.defaultInstanceId).toBe('second');
   });
+
+  // P2-5: instance list includes connection metadata URLs.
+  test('GET /api/instances includes instanceVersionUrl and browserWebSocketDebuggerUrl', async () => {
+    chrome = await startMockChromeServer();
+
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'default',
+        DEFAULT_INSTANCE_MODE: 'attached',
+        DEFAULT_INSTANCE_BROWSER_URL: chrome.origin,
+      },
+      logger: createSilentLogger(),
+    });
+
+    // Trigger lazy bootstrap
+    await fetch(`${autorouter.origin}/json/version`);
+
+    const response = await fetch(`${autorouter.origin}/api/instances`);
+    const list = (await response.json()) as Array<{
+      instanceId: string;
+      instanceVersionUrl: string;
+      browserWebSocketDebuggerUrl: string;
+    }>;
+
+    expect(list[0].instanceVersionUrl).toMatch(
+      /^http:\/\/127\.0\.0\.1:\d+\/instances\/default\/json\/version$/,
+    );
+    expect(list[0].browserWebSocketDebuggerUrl).toMatch(
+      /^ws:\/\/127\.0\.0\.1:\d+\/instances\/default\/devtools\/browser$/,
+    );
+  });
 });

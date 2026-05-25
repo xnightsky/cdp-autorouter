@@ -60,8 +60,9 @@ function isMainModule(): boolean {
 function serializeInstance(
   instance: RuntimeInstance,
   defaultInstanceId?: string,
+  requestHost?: string,
 ) {
-  return {
+  const base: Record<string, unknown> = {
     instanceId: instance.instanceId,
     source: instance.source,
     mode: instance.mode,
@@ -78,6 +79,13 @@ function serializeInstance(
     chromeLaunchArgs: instance.chromeLaunchArgs,
     isDefault: instance.instanceId === defaultInstanceId,
   };
+  // P2-5: append connection metadata when request host is available
+  if (requestHost) {
+    const prefix = `/instances/${instance.instanceId}`;
+    base.instanceVersionUrl = `http://${requestHost}${prefix}/json/version`;
+    base.browserWebSocketDebuggerUrl = `ws://${requestHost}${prefix}/devtools/browser`;
+  }
+  return base;
 }
 
 /** 发送 JSON 响应，Content-Type 固定为 application/json。 */
@@ -347,7 +355,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
           registry
             .list()
             .map(instance =>
-              serializeInstance(instance, currentDefaultInstanceId),
+              serializeInstance(instance, currentDefaultInstanceId, host),
             ),
         );
         return;
@@ -372,7 +380,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
           remoteDebuggingPort: body.remoteDebuggingPort,
           executablePath: body.executablePath,
         });
-        json(response, 201, serializeInstance(instance, currentDefaultInstanceId));
+        json(response, 201, serializeInstance(instance, currentDefaultInstanceId, host));
         return;
       }
 
@@ -384,7 +392,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
       }
 
       const instanceActionMatch = path.match(
-        /^\/api\/instances\/([^/]+)(?:\/(start|stop|refresh|health|extensions|switch))?$/,
+        /^\/api\/instances\/([^/]+)(?:\/(start|stop|restart|refresh|health|extensions|switch))?$/,
       );
       if (instanceActionMatch) {
         const [, rawInstanceId, action] = instanceActionMatch;
@@ -396,6 +404,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             serializeInstance(
               registry.require(instanceId),
               currentDefaultInstanceId,
+              host,
             ),
           );
           return;
@@ -408,6 +417,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             serializeInstance(
               registry.update(instanceId, body),
               currentDefaultInstanceId,
+              host,
             ),
           );
           return;
@@ -424,6 +434,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             serializeInstance(
               await supervisor.start(registry.require(instanceId)),
               currentDefaultInstanceId,
+              host,
             ),
           );
           return;
@@ -436,8 +447,15 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             serializeInstance(
               registry.require(instanceId),
               currentDefaultInstanceId,
+              host,
             ),
           );
+          return;
+        }
+        if (method === 'POST' && action === 'restart') {
+          await supervisor.stop(instanceId);
+          const restarted = await supervisor.start(registry.require(instanceId));
+          json(response, 200, serializeInstance(restarted, currentDefaultInstanceId, host));
           return;
         }
         if (method === 'POST' && action === 'refresh') {
@@ -447,6 +465,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             serializeInstance(
               await supervisor.refresh(instanceId),
               currentDefaultInstanceId,
+              host,
             ),
           );
           return;
@@ -476,7 +495,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             return;
           }
           currentDefaultInstanceId = instanceId;
-          json(response, 200, serializeInstance(instance, currentDefaultInstanceId));
+          json(response, 200, serializeInstance(instance, currentDefaultInstanceId, host));
           return;
         }
       }
