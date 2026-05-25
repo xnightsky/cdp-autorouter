@@ -17,8 +17,9 @@
 | 5 | HTTP Compat Proxy（/json/version, /json/list, /json/protocol） | ✅ 已实现 | 手动 fetch + 精确 JSON rewrite |
 | 6 | webSocketDebuggerUrl 改写 | ✅ 已实现 | **使用 token 映射（RouteBindingStore），真实 Chrome WS 地址永不对外暴露** |
 | 7 | WS CDP Proxy（/devtools/browser/*, /devtools/page/*） | ✅ 已实现 | token 验证 + 消息缓冲 + 生命周期管理 |
-| 8 | 显式实例路由（/instances/{id}/json/*, /instances/{id}/devtools/*） | ✅ 已实现 | 路径模板规范，不依赖正则数字匹配 |
-| 9 | Admin API CRUD（GET/POST/PATCH/DELETE /api/instances） | ✅ 已实现 | 完整的 REST 风格 CRUD |
+| 8 | 显式实例路由（/instances/{id_or_name}/json/*, /instances/{id_or_name}/devtools/*） | ✅ 已实现 | 路径支持任意字符串实例标识，不依赖数字后缀；对照 repo 只能 `/instance(\d+)` 且须从 1 顺序创建 |
+| 9 | 声明式实例 ID（调用方自定义 instanceId） | ✅ 已实现 | 无自增序号坑；支持语义化命名如 `staging`/`dev-flow`；对照 repo 必须从 instance1 开始递增到目标编号 |
+| 10 | Admin API CRUD（GET/POST/PATCH/DELETE /api/instances） | ✅ 已实现 | 完整的 REST 风格 CRUD |
 | 10 | Admin API 操作（start/stop/refresh/health/extensions） | ✅ 已实现 | 实例生命周期细粒度控制 |
 | 11 | Managed 模式（autorouter 启动并回收子进程） | ✅ 已实现 | SIGTERM → SIGKILL fallback，优雅关闭 |
 | 12 | Attached 模式（只代理外部浏览器） | ✅ 已实现 | Managed/Attached 回收边界干净 |
@@ -27,6 +28,9 @@
 | 15 | 元数据采集（version/protocolVersion/extensionsSummary） | ✅ 已实现 | 健康检查与状态同步 |
 | 16 | vitest 测试框架 | ✅ 已实现 | config.test.ts + http-compat.test.ts + MockChromeServer |
 | 17 | 架构文档（autorouter-architecture.md, api-design.md, chrome-devtools-mcp-architecture.md） | ✅ 已实现 | 完整设计稿 + 数据流转 + 时序图 |
+| 18 | Agent-Browser 主链设计（agent → MCP → autorouter → Chrome） | ✅ 已实现 | 对照 repo 无明确 agent 接入设计，仅做 CDP 路由；当前项目从架构层保证 agent 永远只连 autorouter，不感知真实 Chrome |
+| 19 | 多 Agent 隔离（binding 校验 instanceId 一致性） | ✅ 已实现 | 对照 repo 所有客户端共享同一路由空间无隔离；当前项目 WS token 绑定 instanceId，跨实例访问被拒绝 |
+| 20 | 按需懒加载（agent 首次 CDP 请求触发实例启动） | ✅ 已实现 | 对照 repo 的 autoStart=false 仍需手动 curl 创建；当前项目 agent 首次 GET /json/version 即自动 bootstrap + start |
 
 ## 2. 待实现清单
 
@@ -208,18 +212,22 @@ P6-5  CHANGELOG.md
 
 | 维度 | 对照 repo（chrome-cdp-autorouter v1.0.0） | 当前 repo（chrome-devtools-mcp-autorouter v0.1.0） |
 |------|------------------------------------------|---------------------------------------------------|
-| **WS 安全性** | URL 改写但无 token 隔离 | ✅ **Token 映射，真实地址永不对外暴露** |
-| **实例模式** | 仅 managed 模式 | ✅ **managed + attached 双模式** |
-| **实例生命周期** | start / stop | ✅ **create / start / stop / refresh / health / reclaim** |
+| **Agent-Browser 主链** | 无明确 agent 接入设计，仅做 CDP 路由 | ✅ **完整 `agent → MCP → autorouter → Chrome` 主链设计**；agent 永远只连 autorouter，不感知真实 Chrome |
+| **多 Agent 隔离** | 无隔离机制，所有客户端共享同一路由空间 | ✅ **不同 agent 通过不同 instanceId 隔离操作**；binding 校验 instanceId 一致性，禁止跨实例访问 |
+| **WS 安全性** | URL 改写但无 token 隔离 | ✅ **Token 映射，真实地址永不对外暴露**；agent 拿到的 wsUrl 是一次性 token，不可猜测 |
+| **懒加载语义** | autoStart 开关，但无 agent 首次请求触发机制 | ✅ **agent 首次 CDP 请求时才触发默认实例启动**；零预热成本，按需分配资源 |
+| **实例路由寻址** | 仅支持 `/instance(\d+)` 数字后缀路由 | ✅ **`/instances/{id_or_name}` 任意字符串路由**，支持 ID 和语义化名称混用 |
+| **实例模式** | 仅 managed 模式 | ✅ **managed + attached 双模式**；agent 可接入人工已打开的浏览器（attached），也可让 autorouter 代管（managed） |
+| **实例生命周期** | start / stop | ✅ **create / start / stop / refresh / health / reclaim** 完整状态机 |
 | **类型安全** | JS + JSDoc | ✅ **TypeScript strict mode** |
-| **测试** | 无可见测试 | ✅ **vitest + MockChromeServer** |
-| **架构文档** | README 草图 | ✅ **3 份设计稿 + Mermaid 图** |
+| **测试** | node:test（10 文件） | ✅ **vitest + MockChromeServer**（6 文件，覆盖核心链路） |
+| **架构文档** | README + QUICKSTART + IMPLEMENTATION | ✅ **3 份设计稿 + Mermaid 时序图 + 数据流转图** |
 | **CLI + Skill 控制面** | ⚠️ CLI 只管启动，控制面靠 curl；Skill 与当前 API 不一致 | ✅ **新增 P3.5：CLI 实例管理子命令 + Skill 重写对齐 + agent 自动感知** |
 | **日志系统** | ✅ 文件 + 控制台 + ANSI | ❌ 缺失 |
 | **反代支持** | ✅ x-forwarded-* | ❌ 缺失 |
 | **能力发现** | ✅ /api/capabilities | ❌ 缺失 |
 | **MCP 适配器** | ✅ browserUrl → wsEndpoint 升级 | ❌ 缺失 |
-| **实例 ID 控制权** | ❌ `nextInstanceId++` 强制递增，调用方无法自定义 | ✅ **调用方在 POST body 中指定任意字符串 `instanceId`**，无顺序约束，符合 ADP-314 规范 |
+| **实例 ID 控制权** | ❌ `nextInstanceId++` 强制递增，调用方无法自定义；想要 instance3 必须从 1 开始循环创建到 3；删除后 ID 不回收 | ✅ **调用方在 POST body 中指定任意字符串 `instanceId`（支持 `:id_or_name`）**，无顺序约束，可用语义化名称如 `staging`/`test-flow`，符合 ADP-314 规范 |
 | **devtoolsFrontendUrl 重写** | ✅ | ❌ 缺失 |
 | **实例切换** | ✅ switch API | ❌ 缺失 |
 | **实例重启** | ✅ restart API | ❌ 缺失 |
