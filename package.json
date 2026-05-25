@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "HTTP+WS autorouter between chrome-devtools-mcp and real Chrome instances",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xnightsky/chrome-devtools-mcp-autorouter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xnightsky/chrome-devtools-mcp-autorouter/issues"
+  },
+  "homepage": "https://github.com/xnightsky/chrome-devtools-mcp-autorouter#readme",
   "bin": {
     "autorouter-cli": "./dist/src/cli/autorouter-cli.js"
   },
@@ -20,7 +29,7 @@
   },
   "dependencies": {
     "dotenv": "^16.6.1",
-    "ws": "^8.18.3"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",

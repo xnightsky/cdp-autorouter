@@ -1,5 +1,28 @@
 # chrome-devtools-mcp-autorouter
 
+`chrome-devtools-mcp-autorouter` 是一层本地 HTTP + WebSocket 代理，用于把
+`chrome-devtools-mcp`、`agent-browser` 或其他 CDP 客户端稳定路由到真实 Chrome
+实例。
+
+它不是 `chrome-devtools-mcp` 的替代品，而是放在客户端和 Chrome 之间的可控入口：
+
+```text
+chrome-devtools-mcp -> autorouter (HTTP + WS) -> real Chrome instance
+```
+
+核心目标：
+
+- 对上游暴露 Chrome DevTools 兼容的 `/json/*` 发现接口；
+- 改写 `webSocketDebuggerUrl`，避免直接暴露真实 Chrome WS 地址；
+- 通过 Admin API 管理 `managed` / `attached` 实例；
+- 为多 agent、本地脚本和 CLI 提供同一套实例路由能力。
+
+## 环境要求
+
+- Node.js >= 20.19.0
+- npm
+- Chrome / Chromium（`managed` 模式需要可执行文件，`attached` 模式需要已有远程调试端点）
+
 ## Quick Start
 
 所有玩法的共同前置（在项目根目录执行）：
@@ -9,6 +32,15 @@
 npm install && npm run build
 npm install -g .               # 注册 autorouter-cli 到全局 PATH
 npm start                      # 启动服务，端口由 .env SERVER_PORT 决定（默认 3100）
+```
+
+如果只想本地开发，不需要全局安装 CLI：
+
+```bash
+npm install
+npm run build
+npm test
+npm run dev
 ```
 
 以下命令均为全局可用，任意目录执行：
@@ -119,5 +151,30 @@ autorouter-cli skills get autorouter-cli   # 动态加载完整指令集
 - 回收路径包括 `POST /api/instances/{instanceId}/stop`、`POST /api/instances/reclaim-managed`、服务进程退出或遇到致命错误时的 cleanup 钩子；
 - 回收流程按 `reclaiming -> stop -> kill -> cleanup` 顺序执行，期间拒绝新的 HTTP/WS 请求，优先发起优雅关闭并在超时后强制 kill；
 - 只对 `managed` 实例执行回收，`attached` 模式的浏览器，以及 chrome-devtools-mcp 侧自行管理的实例由外部负责清理。
+
+## 开发与验证
+
+常用命令：
+
+```bash
+npm run build
+npm test
+```
+
+仓库目前没有统一 Prettier / ESLint 配置，提交前请保持周边 TypeScript 与 Markdown 风格一致。
+
+## 贡献指南
+
+欢迎提交 Issue 和 Pull Request。为了让变更更容易 review，请遵守以下约定：
+
+- 先阅读 `AGENTS.md`、`docs/autorouter-architecture.md`、`docs/api-design.md` 和 `docs/roadmap.md`，确认变更没有偏离 v1 设计边界。
+- 实现代码变更后运行 `npm run build` 与 `npm test`。
+- 涉及 `.env` 加载、默认实例懒加载、`/json/version` 改写、`/json/list`、`GET /api/instances`、WS 代理或 managed 回收时，同步补充测试。
+- 不把真实 API Key、密码、私钥、数据库连接串、内网地址或个人浏览器 profile 路径提交到仓库。
+- 提交信息建议使用 `feat:`、`fix:`、`docs:`、`test:`、`refactor:`、`chore:` 等前缀。
+
+## 安全
+
+请不要在公开 Issue 中披露可利用细节、真实凭证或私有环境信息。漏洞报告方式见 `SECURITY.md`。
 
 以上内容应足以让新成员快速把本项目定位为“兼容型代理 + 实例管理”，并明确如何在 `.env` 与 Admin API 之间权衡配置与运行状态。
