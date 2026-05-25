@@ -127,6 +127,31 @@ function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
 }
 
 /**
+ * Resolve the public-facing host for URL generation.
+ *
+ * When `trustProxy` is enabled, prefers `x-forwarded-host` (with optional
+ * `x-forwarded-port` and `x-forwarded-proto` for ws/wss scheme inference).
+ * Falls back to the `Host` header or server bind address.
+ */
+function resolvePublicHost(
+  request: http.IncomingMessage,
+  policy: {trustProxy: boolean; serverHost: string; serverPort: number},
+): string {
+  if (policy.trustProxy) {
+    const fwdHost = request.headers['x-forwarded-host'];
+    if (fwdHost) {
+      const host = Array.isArray(fwdHost) ? fwdHost[0] : fwdHost;
+      const fwdPort = request.headers['x-forwarded-port'];
+      const port = Array.isArray(fwdPort) ? fwdPort[0] : fwdPort;
+      // If x-forwarded-host already includes port, use as-is
+      if (host.includes(':') || !port) return host;
+      return `${host}:${port}`;
+    }
+  }
+  return request.headers.host ?? `${policy.serverHost}:${policy.serverPort}`;
+}
+
+/**
  * 构建 autorouter HTTP 服务器、WebSocket 代理、运行时注册表和关闭钩子。
  *
  * 返回的对象既是测试的入口点，也是 CLI 启动路径（`node dist/index.js`）使用的服务引导对象。
@@ -313,7 +338,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
   const server = http.createServer(async (request, response) => {
     // 提前提取请求元数据，确保正常路径和 catch 块都能访问。
-    const host = request.headers.host ?? `${policy.serverHost}:${policy.serverPort}`;
+    const host = resolvePublicHost(request, policy);
     const url = new URL(request.url ?? '/', `http://${host}`);
     const path = url.pathname;
     const method = request.method ?? 'GET';
@@ -392,7 +417,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
       }
 
       const instanceActionMatch = path.match(
-        /^\/api\/instances\/([^/]+)(?:\/(start|stop|restart|refresh|health|extensions|switch))?$/,
+        /^\/api\/instances\/([^/]+)(?:\/(start|stop|restart|refresh|health|status|extensions|switch))?$/,
       );
       if (instanceActionMatch) {
         const [, rawInstanceId, action] = instanceActionMatch;
@@ -468,6 +493,18 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
               host,
             ),
           );
+          return;
+        }
+        if (method === 'GET' && action === 'status') {
+          const instance = registry.require(instanceId);
+          json(response, 200, {
+            instanceId: instance.instanceId,
+            status: instance.status,
+            version: instance.version,
+            protocolVersion: instance.protocolVersion,
+            lastHeartbeatAt: instance.lastHeartbeatAt,
+            lastError: instance.lastError,
+          });
           return;
         }
         if (method === 'GET' && action === 'health') {
@@ -551,7 +588,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
   server.on('upgrade', async (request, socket, head) => {
     try {
-      const host = request.headers.host ?? `${policy.serverHost}:${policy.serverPort}`;
+      const host = resolvePublicHost(request, policy);
       const url = new URL(request.url ?? '/', `http://${host}`);
       const match = url.pathname.match(
         /^(?:\/instances\/([^/]+))?\/devtools\/(browser|page)\/([^/]+)$/,

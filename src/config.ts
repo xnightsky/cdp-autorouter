@@ -92,6 +92,7 @@ export function loadEnvPolicy(
     // 这两个标志控制根路径兼容路由是否可用，以及是否允许在首次使用时懒加载默认实例。
     compatModeEnabled: parseBoolean(env.COMPAT_MODE_ENABLED, true),
     compatLazyLoadEnabled: parseBoolean(env.COMPAT_LAZY_LOAD_ENABLED, true),
+    trustProxy: parseBoolean(env.TRUST_PROXY, false),
     serverHost: env.SERVER_HOST?.trim() || '127.0.0.1',
     serverPort: parseNumber(env.SERVER_PORT, 3100),
     logLevel,

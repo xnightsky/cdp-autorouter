@@ -122,6 +122,7 @@ export interface RuntimeInstance extends InstanceDefinition, InstanceRuntimeStat
 export interface EnvPolicy {
   compatModeEnabled: boolean;
   compatLazyLoadEnabled: boolean;
+  trustProxy: boolean;
   serverHost: string;
   serverPort: number;
   logLevel: LogLevel;

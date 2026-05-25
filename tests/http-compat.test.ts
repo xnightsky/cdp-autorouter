@@ -94,6 +94,33 @@ describe('HTTP compat proxy', () => {
     expect((caps.runtime as Record<string, unknown>).defaultInstanceId).toBe('main');
   });
 
+  // P1-2: reverse proxy headers are respected when TRUST_PROXY is enabled.
+  test('uses x-forwarded-host when TRUST_PROXY is enabled', async () => {
+    chrome = await startMockChromeServer();
+
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        TRUST_PROXY: 'true',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'default',
+        DEFAULT_INSTANCE_MODE: 'attached',
+        DEFAULT_INSTANCE_BROWSER_URL: chrome.origin,
+      },
+      logger: createSilentLogger(),
+    });
+
+    const response = await fetch(`${autorouter.origin}/json/version`, {
+      headers: {'x-forwarded-host': 'public.example.com:443'},
+    });
+    const payload = (await response.json()) as {webSocketDebuggerUrl: string; autorouter: {capabilitiesEndpoint: string}};
+
+    expect(payload.webSocketDebuggerUrl).toContain('public.example.com:443');
+    expect(payload.autorouter.capabilitiesEndpoint).toContain('public.example.com:443');
+  });
+
   // 保护设计阶段曾混淆的 API 边界：Admin API 列出的是 autorouter 实例，不是 Chrome 页面。
   test('GET /api/instances returns autorouter instances instead of chrome pages', async () => {
     chrome = await startMockChromeServer();

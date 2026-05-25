@@ -11,6 +11,7 @@ describe('DefaultInstanceResolver logger integration', () => {
     const policy = {
       compatModeEnabled: true,
       compatLazyLoadEnabled: true,
+      trustProxy: false,
       serverHost: '127.0.0.1',
       serverPort: 3100,
       logLevel: 'info' as const,
@@ -33,6 +34,7 @@ describe('DefaultInstanceResolver logger integration', () => {
     const policy = {
       compatModeEnabled: true,
       compatLazyLoadEnabled: false,
+      trustProxy: false,
       serverHost: '127.0.0.1',
       serverPort: 3100,
       logLevel: 'info' as const,
@@ -54,6 +56,7 @@ describe('DefaultInstanceResolver logger integration', () => {
     const policy = {
       compatModeEnabled: true,
       compatLazyLoadEnabled: true,
+      trustProxy: false,
       serverHost: '127.0.0.1',
       serverPort: 3100,
       logLevel: 'info' as const,
