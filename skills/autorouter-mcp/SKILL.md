@@ -26,11 +26,11 @@ chrome-devtools-mcp --wsEndpoint=ws://127.0.0.1:3100/devtools/browser/<token>
 - `--wsEndpoint <url>`：直接指定 WebSocket 端点（跳过升级逻辑）
 - 其他参数透传给 `chrome-devtools-mcp`
 
-## 与 autorouter-cli 配合
+## 与 cdp-autorouter-cli 配合
 
 ```bash
 # 先用 CLI 获取 ws 地址
-WS=$(autorouter-cli get-ws dev)
+WS=$(cdp-autorouter-cli get-ws dev)
 
 # 方式 1：直接传 wsEndpoint
 chrome-devtools-mcp --wsEndpoint=$WS
@@ -46,7 +46,7 @@ autorouter-mcp --browserUrl http://localhost:3100/instances/dev
   "mcpServers": {
     "browser": {
       "command": "npx",
-      "args": ["chrome-devtools-mcp-autorouter", "--browserUrl", "http://localhost:3100/instances/dev"]
+      "args": ["cdp-autorouter", "--browserUrl", "http://localhost:3100/instances/dev"]
     }
   }
 }

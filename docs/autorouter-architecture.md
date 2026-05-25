@@ -1,8 +1,8 @@
-# chrome-devtools-mcp-autorouter 设计稿
+# cdp-autorouter 设计稿
 
 ## 1. 目标
 
-`chrome-devtools-mcp-autorouter` 的目标不是替代 `chrome-devtools-mcp`，而是在它与真实 Chrome 实例之间增加一层可控的 `HTTP + WS` 代理与实例管理能力。
+`cdp-autorouter` 的目标不是替代 `chrome-devtools-mcp`，而是在它与真实 Chrome 实例之间增加一层可控的 `HTTP + WS` 代理与实例管理能力。
 
 固定主链如下：
 

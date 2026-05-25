@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * autorouter-cli — 控制面客户端入口。
+ * cdp-autorouter-cli — 控制面客户端入口。
  *
  * 手动解析 argv，零额外依赖。
  */
@@ -275,9 +275,9 @@ function handleSkills(args: string[], jsonMode: boolean): void {
 }
 
 function printUsage(): void {
-  process.stdout.write(`autorouter-cli - Control plane client for chrome-devtools-mcp-autorouter
+  process.stdout.write(`cdp-autorouter-cli - Control plane client for cdp-autorouter
 
-Usage: autorouter-cli [--port <port>] [--json] <command> [args]
+Usage: cdp-autorouter-cli [--port <port>] [--json] <command> [args]
 
 Commands:
   connect [port]       Save port to .autorouter file (default: 3100)

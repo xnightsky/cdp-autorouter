@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-`chrome-devtools-mcp-autorouter` is currently pre-1.0. Security fixes are expected to land on the `main` branch first.
+`cdp-autorouter` is currently pre-1.0. Security fixes are expected to land on the `main` branch first.
 
 | Version | Supported |
 | ------- | --------- |

@@ -3,7 +3,7 @@
 
 # AGENTS.md
 
-本文件定义 agent 在 `chrome-devtools-mcp-autorouter` 仓库内工作的约束与上下文。
+本文件定义 agent 在 `cdp-autorouter` 仓库内工作的约束与上下文。
 
 ## 顶层通用规则
 

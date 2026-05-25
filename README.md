@@ -1,6 +1,6 @@
-# chrome-devtools-mcp-autorouter
+# cdp-autorouter
 
-`chrome-devtools-mcp-autorouter` 是一层本地 HTTP + WebSocket 代理，用于把
+`cdp-autorouter` 是一层本地 HTTP + WebSocket 代理，用于把
 `chrome-devtools-mcp`、`agent-browser` 或其他 CDP 客户端稳定路由到真实 Chrome
 实例。
 
@@ -30,7 +30,7 @@ chrome-devtools-mcp -> autorouter (HTTP + WS) -> real Chrome instance
 ```bash
 # cd <项目根目录>
 npm install && npm run build
-npm install -g .               # 注册 autorouter-cli 到全局 PATH
+npm install -g .               # 注册 cdp-autorouter-server / cdp-autorouter-cli 到全局 PATH
 npm start                      # 启动服务，端口由 .env SERVER_PORT 决定（默认 3100）
 ```
 
@@ -53,20 +53,20 @@ npm run dev
 # 以下均为全局命令，任意目录执行
 
 # 连接到 autorouter（端口与 SERVER_PORT 一致）
-autorouter-cli connect <port>
+cdp-autorouter-cli connect <port>
 
 # 创建并启动实例
-autorouter-cli create --id dev --mode attached --browser-url http://localhost:9222
-autorouter-cli start dev
+cdp-autorouter-cli create --id dev --mode attached --browser-url http://localhost:9222
+cdp-autorouter-cli start dev
 
 # agent-browser 直接消费
-agent-browser --cdp $(autorouter-cli get-ws dev)
+agent-browser --cdp $(cdp-autorouter-cli get-ws dev)
 
 # 或 chrome-devtools-mcp
-chrome-devtools-mcp --wsEndpoint=$(autorouter-cli get-ws dev)
+chrome-devtools-mcp --wsEndpoint=$(cdp-autorouter-cli get-ws dev)
 ```
 
-`autorouter-cli get-ws` 输出一行 ws:// 地址，可直接 `$()` 给任何工具消费。
+`cdp-autorouter-cli get-ws` 输出一行 ws:// 地址，可直接 `$()` 给任何工具消费。
 
 ---
 
@@ -93,13 +93,13 @@ curl -s http://localhost:<port>/instances/dev/json/version | jq -r .webSocketDeb
 
 ```bash
 # 安装 skill 到 agent 环境（一次性）
-npx skills add chrome-devtools-mcp-autorouter
+npx skills add cdp-autorouter
 
 # agent 加载 skill 后自动执行：
 #   POST /api/instances → start → get-ws → 传给 agent-browser
 
 # 如果已装 CLI，agent 也可以直接用：
-autorouter-cli skills get autorouter-cli   # 动态加载完整指令集
+cdp-autorouter-cli skills get cdp-autorouter-cli   # 动态加载完整指令集
 ```
 
 ---
@@ -110,7 +110,7 @@ autorouter-cli skills get autorouter-cli   # 动态加载完整指令集
 
 ## 项目定位
 
-`chrome-devtools-mcp-autorouter` 的作用是把原本直接连向 Chrome 的 `chrome-devtools-mcp` 与真实浏览器实例之间插入一层可控的 HTTP + WS 代理，从而达成：
+`cdp-autorouter` 的作用是把原本直接连向 Chrome 的 `chrome-devtools-mcp` 与真实浏览器实例之间插入一层可控的 HTTP + WS 代理，从而达成：
 
 - `chrome-devtools-mcp -> autorouter (HTTP + WS) -> real Chrome instance` 的固定主链。
 - 对上游保持接口兼容，对下游提供灵活的实例管理与路由策略。

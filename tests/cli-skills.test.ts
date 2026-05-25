@@ -7,14 +7,14 @@ describe('skills', () => {
     const skills = listSkills();
     expect(skills.length).toBeGreaterThanOrEqual(2);
     const names = skills.map(s => s.name);
-    expect(names).toContain('autorouter-cli');
+    expect(names).toContain('cdp-autorouter-cli');
     expect(names).toContain('autorouter-mcp');
   });
 
   test('getSkillContent returns content for existing skill', () => {
-    const content = getSkillContent('autorouter-cli');
+    const content = getSkillContent('cdp-autorouter-cli');
     expect(content).not.toBeNull();
-    expect(content).toContain('autorouter-cli');
+    expect(content).toContain('cdp-autorouter-cli');
     expect(content).toContain('get-ws');
   });
 
@@ -24,7 +24,7 @@ describe('skills', () => {
 
   test('getAllSkillsContent includes all skills', () => {
     const content = getAllSkillsContent();
-    expect(content).toContain('autorouter-cli');
+    expect(content).toContain('cdp-autorouter-cli');
     expect(content).toContain('autorouter-mcp');
   });
 });

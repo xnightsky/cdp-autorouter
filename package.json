@@ -1,5 +1,5 @@
 {
-  "name": "chrome-devtools-mcp-autorouter",
+  "name": "cdp-autorouter",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,14 +7,15 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xnightsky/chrome-devtools-mcp-autorouter.git"
+    "url": "git+https://github.com/xnightsky/cdp-autorouter.git"
   },
   "bugs": {
-    "url": "https://github.com/xnightsky/chrome-devtools-mcp-autorouter/issues"
+    "url": "https://github.com/xnightsky/cdp-autorouter/issues"
   },
-  "homepage": "https://github.com/xnightsky/chrome-devtools-mcp-autorouter#readme",
+  "homepage": "https://github.com/xnightsky/cdp-autorouter#readme",
   "bin": {
-    "autorouter-cli": "./dist/src/cli/autorouter-cli.js"
+    "cdp-autorouter-server": "./dist/src/server/index.js",
+    "cdp-autorouter-cli": "./dist/src/cli/autorouter-cli.js"
   },
   "main": "./dist/src/server/index.js",
   "scripts": {

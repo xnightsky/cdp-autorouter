@@ -1,6 +1,6 @@
-# chrome-devtools-mcp-autorouter 路线图
+# cdp-autorouter 路线图
 
-本文档定义 `chrome-devtools-mcp-autorouter` 从当前 `v0.1.0` 向目标版本演进的完整路线图。
+本文档定义 `cdp-autorouter` 从当前 `v0.1.0` 向目标版本演进的完整路线图。
 
 对照基线是 `chrome-cdp-autorouter-=`(`D:\workspace\project\gwm\projtmpl\ai\browser\chrome-devtools\autorouter`),版本 `1.0.0`,以下简称"对照 repo"。
 
@@ -55,7 +55,7 @@
 | P0-1 | **Logger 系统** | `src/logger.js`:文件 + 控制台双写,ANSI 颜色,level 过滤,调用方透明注入 | ✅ 已实现(logger.ts):文件 + 控制台双通道;支持 LOG_LEVEL/LOG_FORMAT/LOG_FILE 环境变量 |
 | ~~P0-2~~ | ~~CLI 启动入口~~ | - | **已取消**:直接用 `npm start` 或包装 shell 脚本启动,不需额外 CLI 入口 |
 | ~~P0-3~~ | ~~CLI 配置初始化~~ | - | **已取消**:`.env` 模板已足够 |
-| ~~P0-4~~ | ~~CLI 验证脚本~~ | - | **已取消**:健康检查通过 `autorouter-cli status` 实现 |
+| ~~P0-4~~ | ~~CLI 验证脚本~~ | - | **已取消**:健康检查通过 `cdp-autorouter-cli status` 实现 |
 | P0-5 | **YAML 配置支持**(可选) | `.env.yaml` + `yaml` 依赖 | 当前 `.env` 已足够 v1,作为可选增强 |
 
 ### P1 - HTTP 代理增强(对标对照 repo 的 router.js 能力)
@@ -101,7 +101,7 @@
 
 **架构决策(ADR-CLI-001)**:
 
-- `autorouter-cli` 是纯控制面客户端,不管服务启动(那是 `npm start` / P0 的事)
+- `cdp-autorouter-cli` 是纯控制面客户端,不管服务启动(那是 `npm start` / P0 的事)
 - `autorouter-mcp` 是数据面桥接,负责 browserUrl→wsEndpoint 升级并 spawn chrome-devtools-mcp
 - CLI 通过 `connect [port]` 持久化连接信息,后续命令无需重复指定端口
 - `get-ws [id]` 命令输出实例的 wsEndpoint,可直接 `$()` 给 mcp/agent-browser 消费
@@ -113,17 +113,17 @@
 | 层 | 内容 | 加载时机 |
 |---|------|--------|
 | 1 `skills/` 目录 | 完整 SKILL.md(触发词 + 命令参考 + 典型流程) | `npx skills add` 安装到 `~/.agents/skills/` |
-| 2 `autorouter-cli skills get <name>` | 输出同一份完整 skill 内容 | agent 运行时动态调用 |
+| 2 `cdp-autorouter-cli skills get <name>` | 输出同一份完整 skill 内容 | agent 运行时动态调用 |
 
 ```bash
 # 安装 skill(一次性)
 npx skills add <our-repo>
 
 # agent 运行时动态加载完整指令
-autorouter-cli skills                        # 列出可用 skills
-autorouter-cli skills get autorouter-cli     # 输出控制面 skill
-autorouter-cli skills get autorouter-mcp     # 输出 MCP 包装器 skill
-autorouter-cli skills get --all              # 输出所有
+cdp-autorouter-cli skills                        # 列出可用 skills
+cdp-autorouter-cli skills get cdp-autorouter-cli     # 输出控制面 skill
+cdp-autorouter-cli skills get autorouter-mcp     # 输出 MCP 包装器 skill
+cdp-autorouter-cli skills get --all              # 输出所有
 ```
 
 **与 `chrome-devtools-ext-autorouter` skill 的关系**:不互斥。有 CLI 时 agent 直接用 CLI(不需读 skill);无 CLI 时 skill 提供 bash+curl 降级方案。两者是同一控制面的两种消费形态。
@@ -132,51 +132,51 @@ autorouter-cli skills get --all              # 输出所有
 
 | bin 名 | 职责 |
 |--------|------|
-| `autorouter-cli` | 纯控制面客户端:连接管理 + 实例 CRUD + get-ws |
+| `cdp-autorouter-cli` | 纯控制面客户端:连接管理 + 实例 CRUD + get-ws |
 | `autorouter-mcp` | MCP 包装器:自动升级参数并 spawn chrome-devtools-mcp |
 
-**`autorouter-cli` 命令表**:
+**`cdp-autorouter-cli` 命令表**:
 
 ```
-autorouter-cli connect [port]          # 持久化端口到 .autorouter 文件
-autorouter-cli disconnect               # 清除持久化连接
-autorouter-cli list                     # 列出实例
-autorouter-cli create --id <id> --mode <mode> [--browser-url <url>]  # 创建实例
-autorouter-cli start <id>               # 启动实例
-autorouter-cli stop <id>                # 停止实例
-autorouter-cli restart <id>             # 重启实例
-autorouter-cli switch <id>              # 切换默认实例
-autorouter-cli status <id>              # 查看实例状态
-autorouter-cli delete <id>              # 删除实例
-autorouter-cli get-ws [id]              # 输出实例的 wsEndpoint(可 $() 消费)
+cdp-autorouter-cli connect [port]          # 持久化端口到 .autorouter 文件
+cdp-autorouter-cli disconnect               # 清除持久化连接
+cdp-autorouter-cli list                     # 列出实例
+cdp-autorouter-cli create --id <id> --mode <mode> [--browser-url <url>]  # 创建实例
+cdp-autorouter-cli start <id>               # 启动实例
+cdp-autorouter-cli stop <id>                # 停止实例
+cdp-autorouter-cli restart <id>             # 重启实例
+cdp-autorouter-cli switch <id>              # 切换默认实例
+cdp-autorouter-cli status <id>              # 查看实例状态
+cdp-autorouter-cli delete <id>              # 删除实例
+cdp-autorouter-cli get-ws [id]              # 输出实例的 wsEndpoint(可 $() 消费)
 ```
 
 **典型用法**:
 
 ```bash
 # 首次连接
-autorouter-cli connect 9300
+cdp-autorouter-cli connect 9300
 
 # 控制面操作
-autorouter-cli create --id dev --mode attached --browser-url http://localhost:9222
-autorouter-cli start dev
-autorouter-cli list
+cdp-autorouter-cli create --id dev --mode attached --browser-url http://localhost:9222
+cdp-autorouter-cli start dev
+cdp-autorouter-cli list
 
 # 获取 ws 地址给工具消费
-chrome-devtools-mcp --wsEndpoint=$(autorouter-cli get-ws dev)
-agent-browser --cdp $(autorouter-cli get-ws dev)
+chrome-devtools-mcp --wsEndpoint=$(cdp-autorouter-cli get-ws dev)
+agent-browser --cdp $(cdp-autorouter-cli get-ws dev)
 
 # 一次性指定端口(不持久化)
-autorouter-cli --port 9300 list
+cdp-autorouter-cli --port 9300 list
 ```
 
 | # | 能力 | 对照 repo 现状 | 当前要做得更好的方向 |
 |---|------|--------------|---------------------|
-| P3.5-1 | **autorouter-cli 控制面客户端** | 无,控制面靠手动 curl | ✅ **已实现**:`connect`/`disconnect` 持久化连接;实例 CRUD 子命令;`--json` 输出模式供脚本消费;命令失败时返回结构化错误信息和修复建议 |
-| P3.5-2 | **get-ws 快速获取 wsEndpoint** | 无 | ✅ **已实现**:`autorouter-cli get-ws [id]` 输出实例的 wsEndpoint 到 stdout;可直接 `$()` 给 chrome-devtools-mcp 或 agent-browser 消费;无 id 时返回默认实例 |
-| P3.5-3 | **Skill 重写对齐当前 API** | Skill 引用旧端口 9223、旧路径 `/instanceN`、旧响应格式 | 重写 `chrome-devtools-ext-autorouter` skill 对齐当前 API(端口 3100、路径 `/instances/{id}`)。**与 `autorouter-cli` 不互斥**:有 CLI 时 agent 直接用 CLI 不需读 skill;无 CLI 时 skill 提供 bash+curl 降级方案。两者是同一控制面的两种消费形态,不是二选一 |
+| P3.5-1 | **cdp-autorouter-cli 控制面客户端** | 无,控制面靠手动 curl | ✅ **已实现**:`connect`/`disconnect` 持久化连接;实例 CRUD 子命令;`--json` 输出模式供脚本消费;命令失败时返回结构化错误信息和修复建议 |
+| P3.5-2 | **get-ws 快速获取 wsEndpoint** | 无 | ✅ **已实现**:`cdp-autorouter-cli get-ws [id]` 输出实例的 wsEndpoint 到 stdout;可直接 `$()` 给 chrome-devtools-mcp 或 agent-browser 消费;无 id 时返回默认实例 |
+| P3.5-3 | **Skill 重写对齐当前 API** | Skill 引用旧端口 9223、旧路径 `/instanceN`、旧响应格式 | 重写 `chrome-devtools-ext-autorouter` skill 对齐当前 API(端口 3100、路径 `/instances/{id}`)。**与 `cdp-autorouter-cli` 不互斥**:有 CLI 时 agent 直接用 CLI 不需读 skill;无 CLI 时 skill 提供 bash+curl 降级方案。两者是同一控制面的两种消费形态,不是二选一 |
 | P3.5-4 | **Skill 自动感知 + CLI 发现** | 无 | `/json/version` 已注入 `autorouter` 元数据字段(P1-4 已实现);Skill 首次调用即可判断 autorouter 版本并选择对应操作路径 |
-| P3.5-5 | **`autorouter-cli skills` 子命令** | 无 | ✅ **已实现**:`skills/` 目录即是 `npx skills add` 的源也是 `autorouter-cli skills get` 的输出源，单层架构无中间层；随 npm 包版本发布 |
+| P3.5-5 | **`cdp-autorouter-cli skills` 子命令** | 无 | ✅ **已实现**:`skills/` 目录即是 `npx skills add` 的源也是 `cdp-autorouter-cli skills get` 的输出源，单层架构无中间层；随 npm 包版本发布 |
 | P3.5-6 | **CLI 作为 MCP tool 暴露**(可选) | 无 | 将 CLI 实例管理能力封装为 MCP tool,让 agent 通过 MCP 协议直接调用 |
 
 ### P4 - 安全性增强(当前 repo 已有 WS token 隔离,继续加固)
@@ -254,11 +254,11 @@ P4-2  WS 并发连接限流
 **目标**:让人和 agent 都能高效操作 autorouter 控制面,不再依赖手动 curl。
 
 ```
-P3.5-1  autorouter-cli 控制面客户端(connect/disconnect/list/create/start/stop/restart/switch/status/delete)
+P3.5-1  cdp-autorouter-cli 控制面客户端(connect/disconnect/list/create/start/stop/restart/switch/status/delete)
 P3.5-2  get-ws 快速获取 wsEndpoint
 P3.5-3  Skill 重写对齐当前 API
 P3.5-4  Skill 自动感知 + CLI 发现
-P3.5-5  autorouter-cli skills 子命令(skills/ 单层架构)
+P3.5-5  cdp-autorouter-cli skills 子命令(skills/ 单层架构)
 ```
 
 ### Phase 4:MCP 集成 + 可观测性(预计 P3 + P5)
@@ -288,7 +288,7 @@ P6-5  CHANGELOG.md
 
 ## 4. 当前 repo 相比对照 repo 的核心差异总结
 
-| 维度 | 对照 repo(chrome-cdp-autorouter v1.0.0) | 当前 repo(chrome-devtools-mcp-autorouter v0.1.0) |
+| 维度 | 对照 repo(chrome-cdp-autorouter v1.0.0) | 当前 repo(cdp-autorouter v0.1.0) |
 |------|------------------------------------------|---------------------------------------------------|
 | **Agent-Browser 主链** | 无明确 agent 接入设计,仅做 CDP 路由 | ✅ **完整 `agent → MCP → autorouter → Chrome` 主链设计**;agent 永远只连 autorouter,不感知真实 Chrome |
 | **多 Agent 隔离** | 无隔离机制,所有客户端共享同一路由空间 | ✅ **不同 agent 通过不同 instanceId 隔离操作**;binding 校验 instanceId 一致性,禁止跨实例访问 |

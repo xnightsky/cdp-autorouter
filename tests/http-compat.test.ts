@@ -62,7 +62,7 @@ describe('HTTP compat proxy', () => {
       capabilitiesEndpoint: string;
     };
     expect(meta).toBeDefined();
-    expect(meta.name).toBe('chrome-devtools-mcp-autorouter');
+    expect(meta.name).toBe('cdp-autorouter');
     expect(meta.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(meta.multiInstance).toBe(true);
     expect(meta.defaultInstanceId).toBe('default');
@@ -85,7 +85,7 @@ describe('HTTP compat proxy', () => {
     expect(response.status).toBe(200);
 
     const caps = (await response.json()) as Record<string, unknown>;
-    expect(caps.name).toBe('chrome-devtools-mcp-autorouter');
+    expect(caps.name).toBe('cdp-autorouter');
     expect(caps.version).toMatch(/^\d+\.\d+\.\d+/);
     expect((caps.capabilities as Record<string, unknown>).multiInstance).toBe(true);
     expect((caps.capabilities as Record<string, unknown>).wsTokenIsolation).toBe(true);

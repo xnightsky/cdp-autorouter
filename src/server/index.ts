@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {dirname, resolve} from 'node:path';
@@ -241,7 +242,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   ) => {
     const defaultInstanceId = currentDefaultInstanceId ?? null;
     const autorouterMeta = {
-      name: 'chrome-devtools-mcp-autorouter',
+      name: 'cdp-autorouter',
       version: packageVersion,
       multiInstance: true,
       defaultInstanceId,
@@ -350,7 +351,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
       // Admin API: service capabilities and endpoint discovery.
       if (method === 'GET' && path === '/api/capabilities') {
         json(response, 200, {
-          name: 'chrome-devtools-mcp-autorouter',
+          name: 'cdp-autorouter',
           version: packageVersion,
           capabilities: {
             multiInstance: true,
