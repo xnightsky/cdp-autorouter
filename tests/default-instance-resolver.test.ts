@@ -1,7 +1,7 @@
 import {describe, expect, test} from 'vitest';
 
-import {DefaultInstanceResolver} from '../src/default-instance-resolver.js';
-import {RuntimeRegistry} from '../src/runtime-registry.js';
+import {DefaultInstanceResolver} from '../src/server/default-instance-resolver.js';
+import {RuntimeRegistry} from '../src/server/runtime-registry.js';
 import {createMockLogger} from './helpers/mock-logger.js';
 
 describe('DefaultInstanceResolver logger integration', () => {

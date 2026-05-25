@@ -3,8 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest';
 
-import {createLogger} from '../src/logger.js';
-import type {LogLevel} from '../src/types.js';
+import {createLogger} from '../src/server/logger.js';
+import type {LogLevel} from '../src/server/types.js';
 
 let tmpDir = '';
 let stderrSpy: any;

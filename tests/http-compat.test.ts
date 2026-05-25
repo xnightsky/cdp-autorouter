@@ -3,7 +3,7 @@ import {WebSocket} from 'ws';
 
 import {startMockChromeServer, type MockChromeServer} from './helpers/mockChromeServer.js';
 import {createSilentLogger} from './helpers/mock-logger.js';
-import {createAutorouterServer} from '../src/index.js';
+import {createAutorouterServer} from '../src/server/index.js';
 
 describe('HTTP compat proxy', () => {
   let chrome: MockChromeServer | undefined;

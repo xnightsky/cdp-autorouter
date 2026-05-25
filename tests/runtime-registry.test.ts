@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'vitest';
 
-import {RuntimeRegistry} from '../src/runtime-registry.js';
+import {RuntimeRegistry} from '../src/server/runtime-registry.js';
 import {createMockLogger} from './helpers/mock-logger.js';
 
 describe('RuntimeRegistry logger integration', () => {

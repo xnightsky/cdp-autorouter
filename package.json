@@ -7,11 +7,11 @@
   "bin": {
     "autorouter-cli": "./dist/src/cli/autorouter-cli.js"
   },
-  "main": "./dist/src/index.js",
+  "main": "./dist/src/server/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx src/index.ts",
-    "start": "node dist/src/index.js",
+    "dev": "tsx src/server/index.ts",
+    "start": "node dist/src/server/index.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

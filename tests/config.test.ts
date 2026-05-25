@@ -4,7 +4,7 @@ import path from 'node:path';
 import {afterEach, describe, expect, test} from 'vitest';
 
 import {createSilentLogger} from './helpers/mock-logger.js';
-import {createAutorouterServer} from '../src/index.js';
+import {createAutorouterServer} from '../src/server/index.js';
 
 const envPath = path.resolve('.env');
 

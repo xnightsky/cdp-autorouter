@@ -1,4 +1,4 @@
-import type {Logger, LogLevel, LoggerOptions} from '../../src/types.js';
+import type {Logger, LogLevel, LoggerOptions} from '../../src/server/types.js';
 
 /**
  * 返回一个什么都不做的 logger，零输出。

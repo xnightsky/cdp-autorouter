@@ -3,7 +3,7 @@ import {
   resolveAutorouterInstanceVersionUrl,
   resolveAutorouterWsEndpoint,
   resolveChromeDevToolsMcpLaunchArgs,
-} from '../src/mcp-launch-options.js';
+} from '../src/server/mcp-launch-options.js';
 
 describe('mcp-launch-options', () => {
   describe('resolveAutorouterInstanceVersionUrl', () => {

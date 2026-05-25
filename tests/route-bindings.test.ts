@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'vitest';
 
-import {RouteBindingStore} from '../src/route-bindings.js';
+import {RouteBindingStore} from '../src/server/route-bindings.js';
 import {createMockLogger} from './helpers/mock-logger.js';
 
 describe('RouteBindingStore logger integration', () => {
