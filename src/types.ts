@@ -104,6 +104,7 @@ export interface InstanceRuntimeState {
   extensionsSummary: string[];
   lastHeartbeatAt?: string;
   lastError?: string;
+  pageCount?: number;
   managedProcess?: ChildProcess;
   managedProcessPid?: number;
   autoCreatedUserDataDir?: boolean;

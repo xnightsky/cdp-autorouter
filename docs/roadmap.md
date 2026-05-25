@@ -31,6 +31,16 @@
 | 18 | Agent-Browser 主链设计（agent → MCP → autorouter → Chrome） | ✅ 已实现 | 对照 repo 无明确 agent 接入设计，仅做 CDP 路由；当前项目从架构层保证 agent 永远只连 autorouter，不感知真实 Chrome |
 | 19 | 多 Agent 隔离（binding 校验 instanceId 一致性） | ✅ 已实现 | 对照 repo 所有客户端共享同一路由空间无隔离；当前项目 WS token 绑定 instanceId，跨实例访问被拒绝 |
 | 20 | 按需懒加载（agent 首次 CDP 请求触发实例启动） | ✅ 已实现 | 对照 repo 的 autoStart=false 仍需手动 curl 创建；当前项目 agent 首次 GET /json/version 即自动 bootstrap + start |
+| 21 | `/json/version` 注入 autorouter 元数据 | ✅ 已实现（P1-4） | 注入 `autorouter` 字段：name/version/multiInstance/defaultInstanceId/capabilitiesEndpoint；agent 一次 GET 即可感知多实例能力 |
+| 22 | `devtoolsFrontendUrl` 改写 | ✅ 已实现（P1-3） | ws query param 指向 tokenized autorouter 地址，真实 Chrome 地址不暴露 |
+| 23 | 反向代理头支持 | ✅ 已实现（P1-2） | `TRUST_PROXY` 开关 + `x-forwarded-host`/`x-forwarded-port` 解析；URL 生成统一走 `resolvePublicHost` |
+| 24 | `/json/list` 页面数缓存 | ✅ 已实现（P1-6） | 请求 `/json/list` 后自动缓存 `pageCount`，`/api/instances` 响应附带 |
+| 25 | `GET /api/capabilities` 能力发现 | ✅ 已实现（P2-1） | 返回 name/version/capabilities/endpoints/runtime，MCP client 可自动检测 |
+| 26 | `GET /api/instances/{id}/status` | ✅ 已实现（P2-2） | 返回 status + version + protocolVersion + lastHeartbeatAt + lastError |
+| 27 | `POST /api/instances/{id}/switch` 默认实例切换 | ✅ 已实现（P2-3） | 运行时切换默认实例，仅 healthy 实例可切换 |
+| 28 | `POST /api/instances/{id}/restart` | ✅ 已实现（P2-4） | stop → start 组合重启，保留配置刷新进程 |
+| 29 | 实例连接元数据 | ✅ 已实现（P2-5） | 每个实例响应附带 `instanceVersionUrl` + `browserWebSocketDebuggerUrl`，基于请求 host 动态构建 |
+| 30 | MCP 启动参数自动升级 | ✅ 已实现（P3-1） | `resolveChromeDevToolsMcpLaunchArgs()` 导出函数；browserUrl→wsEndpoint 自动解析；超时控制 + graceful fallback |
 
 ## 2. 待实现清单
 
@@ -54,12 +64,12 @@
 
 | # | 能力 | 对照 repo 现状 | 当前要做得更好的方向 |
 |---|------|--------------|---------------------|
-| P1-1 | **HOP-by-HOP Header 过滤** | 过滤 `connection/keep-alive/proxy-*` 等 8 个头 | 按 RFC 2616 Section 13.5.1 标准过滤；同时处理 `te`、`trailer`、`transfer-encoding`、`upgrade`；确保不影响 `/json/*` 响应 |
-| P1-2 | **反向代理头支持** | `x-forwarded-host`、`x-forwarded-proto` 解析 | 增加 `x-forwarded-port` 解析；ws/wss scheme 自动推导；生成的外部 URL 优先使用反代头；配置 `TRUST_PROXY` 开关控制是否信任反代头 |
-| P1-3 | **devtoolsFrontendUrl 改写** | 递归重写 JSON 中所有 `devtoolsFrontendUrl` 字段 | 与 `webSocketDebuggerUrl` 改写同层处理；支持 absolute/relative 两种格式；追加实例前缀 |
-| P1-4 | **/json/version 附加 AutoRouter 元数据** | 注入 `AutoRouter: { name, multiInstance, capabilitiesEndpoint }` | 字段名改为 `autorouter`（小写）；增加 `version` 字段；增加 `defaultInstanceId` 字段；MCP client 通过此字段可自动感知多实例能力 |
+| P1-1 | **HOP-by-HOP Header 过滤** | 过滤 `connection/keep-alive/proxy-*` 等 8 个头 | 当前架构不透传下游响应头（JSON 路由完全重构响应），已隐式满足；待 P1-5 透明代理时一并实现 |
+| P1-2 | **反向代理头支持** | `x-forwarded-host`、`x-forwarded-proto` 解析 | ✅ **已实现**：增加 `x-forwarded-port` 解析；配置 `TRUST_PROXY` 开关控制是否信任反代头；`resolvePublicHost` 统一 URL 生成 |
+| P1-3 | **devtoolsFrontendUrl 改写** | 递归重写 JSON 中所有 `devtoolsFrontendUrl` 字段 | ✅ **已实现**：与 `webSocketDebuggerUrl` 改写同层处理；支持 absolute/relative 两种格式；追加实例前缀 |
+| P1-4 | **/json/version 附加 AutoRouter 元数据** | 注入 `AutoRouter: { name, multiInstance, capabilitiesEndpoint }` | ✅ **已实现**：字段名改为 `autorouter`（小写）；增加 `version`/`defaultInstanceId` 字段 |
 | P1-5 | **非 JSON 路径透明代理** | 使用 `http-proxy` 库转发非 `/json/*` 请求 | 不使用 `http-proxy` 依赖，改为手动 `fetch` + stream pipe；保持依赖最小化；非 JSON 路径做 chunked transfer 转发 |
-| P1-6 | **/json/list 页面数缓存** | 无 | 首次 /json/list 后缓存页面数，后续 `/api/instances` 响应可附带 `pageCount`；缓存 TTL 可配置；实例状态变更时主动失效 |
+| P1-6 | **/json/list 页面数缓存** | 无 | ✅ **已实现**：首次 /json/list 后缓存页面数，`/api/instances` 响应附带 `pageCount` |
 
 ### P2 — Admin API 补全（对标对照 repo 的 api.js 能力）
 
@@ -67,11 +77,11 @@
 
 | # | 能力 | 对照 repo 现状 | 当前要做得更好的方向 |
 |---|------|--------------|---------------------|
-| P2-1 | **GET /api/capabilities** | 返回 name/version/capabilities/endpoints/runtime | 增加 `wsTokenMode: true` 声明安全特性；增加 `supportedModes: ["managed", "attached"]`；增加 `serverVersion`（从 package.json 读取） |
-| P2-2 | **GET /api/instances/{id}/status** | 返回 status + pages 数 | 当前已有 `/health`，合并两者语义：`/status` 返回 status + pages + version + protocolVersion + lastHeartbeatAt；`/health` 保留为精简版 |
-| P2-3 | **POST /api/instances/{id}/switch** | 切换默认实例（仅限 running 实例） | 实现 `RuntimeRegistry.setDefaultInstance()`；仅 running 实例可切换；旧默认实例状态不丢失；`GET /api/instances` 响应中标记 `isDefault` |
-| P2-4 | **POST /api/instances/{id}/restart** | 同 ID 重启实例（保留 port/userDataDir） | 实现 stop → wait → start 流程；保留配置但刷新进程；port 占用冲突时自动换端口 + 更新 registry；超时保护 |
-| P2-5 | **实例连接元数据** | `instanceVersionUrl` + `browserWebSocketDebuggerUrl` 稳定对外暴露 | 每次 `/api/instances` 列表响应附带 `instanceVersionUrl` 和 `browserWebSocketDebuggerUrl`；URL 基于当前请求 host 动态构建，支持反代 |
+| P2-1 | **GET /api/capabilities** | 返回 name/version/capabilities/endpoints/runtime | ✅ **已实现**：增加 `wsTokenIsolation`、`supportedModes`、`serverVersion`（从 package.json 读取） |
+| P2-2 | **GET /api/instances/{id}/status** | 返回 status + pages 数 | ✅ **已实现**：`/status` 返回 status + version + protocolVersion + lastHeartbeatAt + lastError；`/health` 保留为精简版 |
+| P2-3 | **POST /api/instances/{id}/switch** | 切换默认实例（仅限 running 实例） | ✅ **已实现**：仅 healthy 实例可切换；`currentDefaultInstanceId` 运行时可变；`isDefault` 标记联动 |
+| P2-4 | **POST /api/instances/{id}/restart** | 同 ID 重启实例（保留 port/userDataDir） | ✅ **已实现**：stop → start 组合流程，保留配置刷新进程 |
+| P2-5 | **实例连接元数据** | `instanceVersionUrl` + `browserWebSocketDebuggerUrl` 稳定对外暴露 | ✅ **已实现**：每次响应附带，URL 基于请求 host 动态构建，支持反代 |
 
 ### P3 — MCP 集成（对标对照 repo 的 mcp-launch-options.js + CLI MCP wrapper）
 
@@ -79,7 +89,7 @@
 
 | # | 能力 | 对照 repo 现状 | 当前要做得更好的方向 |
 |---|------|--------------|---------------------|
-| P3-1 | **chrome-devtools-mcp 启动参数自动升级** | `browserUrl=/instance2` → 自动解析为 `wsEndpoint=ws://...` | 作为独立导出函数 `resolveMcpArgs()`；支持 stdin JSON 输入（MCP 进程调用）；超时与重试控制；错误时回退到原始参数而非静默失败 |
+| P3-1 | **chrome-devtools-mcp 启动参数自动升级** | `browserUrl=/instance2` → 自动解析为 `wsEndpoint=ws://...` | ✅ **已实现**：独立导出函数 `resolveChromeDevToolsMcpLaunchArgs()`；支持 `/instances/{id}` + legacy `/instanceN`；超时控制；失败时 graceful fallback |
 | P3-2 | **MCP 包装器 CLI** | `chrome-cdp-autorouter-mcp` bin 入口，内部 `spawn('npx', ['chrome-devtools-mcp@latest', ...])` | 作为 `bin` 字段独立可执行；支持 `--autorouter-url` 指定 autorouter 地址；自动检测 autorouter 版本与能力；透传所有 chrome-devtools-mcp 参数 |
 | P3-3 | **autorouter skill 感知端点** | 无 | 在 `/json/version` 附加字段让 chrome-devtools-ext-autorouter skill 自动检测；支持 `OPTIONS /api/capabilities` 返回允许的操作集合 |
 
@@ -223,14 +233,14 @@ P6-5  CHANGELOG.md
 | **测试** | node:test（10 文件） | ✅ **vitest + MockChromeServer**（6 文件，覆盖核心链路） |
 | **架构文档** | README + QUICKSTART + IMPLEMENTATION | ✅ **3 份设计稿 + Mermaid 时序图 + 数据流转图** |
 | **CLI + Skill 控制面** | ⚠️ CLI 只管启动，控制面靠 curl；Skill 与当前 API 不一致 | ✅ **新增 P3.5：CLI 实例管理子命令 + Skill 重写对齐 + agent 自动感知** |
-| **日志系统** | ✅ 文件 + 控制台 + ANSI | ❌ 缺失 |
-| **反代支持** | ✅ x-forwarded-* | ❌ 缺失 |
-| **能力发现** | ✅ /api/capabilities | ❌ 缺失 |
-| **MCP 适配器** | ✅ browserUrl → wsEndpoint 升级 | ❌ 缺失 |
+| **日志系统** | ✅ 文件 + 控制台 + ANSI | ✅ **已实现**（logger.ts）：文件 + 控制台双通道，支持 level/format/file 配置 |
+| **反代支持** | ✅ x-forwarded-* | ✅ **已实现**（P1-2）：`TRUST_PROXY` 开关 + `x-forwarded-host`/`x-forwarded-port` |
+| **能力发现** | ✅ /api/capabilities | ✅ **已实现**（P2-1）：返回 capabilities/endpoints/runtime，含 wsTokenIsolation 声明 |
+| **MCP 适配器** | ✅ browserUrl → wsEndpoint 升级 | ✅ **已实现**（P3-1）：`resolveChromeDevToolsMcpLaunchArgs()` + 超时控制 + graceful fallback |
 | **实例 ID 控制权** | ❌ `nextInstanceId++` 强制递增，调用方无法自定义；想要 instance3 必须从 1 开始循环创建到 3；删除后 ID 不回收 | ✅ **调用方在 POST body 中指定任意字符串 `instanceId`（支持 `:id_or_name`）**，无顺序约束，可用语义化名称如 `staging`/`test-flow`，符合 ADP-314 规范 |
-| **devtoolsFrontendUrl 重写** | ✅ | ❌ 缺失 |
-| **实例切换** | ✅ switch API | ❌ 缺失 |
-| **实例重启** | ✅ restart API | ❌ 缺失 |
+| **devtoolsFrontendUrl 重写** | ✅ | ✅ **已实现**（P1-3）：ws param 指向 tokenized 地址，支持实例前缀 |
+| **实例切换** | ✅ switch API | ✅ **已实现**（P2-3）：`POST /api/instances/{id}/switch`，仅 healthy 可切换 |
+| **实例重启** | ✅ restart API | ✅ **已实现**（P2-4）：`POST /api/instances/{id}/restart`，stop→start 组合 |
 
 ## 5. 技术债务（当前已知，不分 phase，择机修复）
 

@@ -74,6 +74,7 @@ function serializeInstance(
     extensionsSummary: instance.extensionsSummary,
     lastHeartbeatAt: instance.lastHeartbeatAt,
     lastError: instance.lastError,
+    pageCount: instance.pageCount,
     managedProcessPid: instance.managedProcessPid,
     userDataDir: instance.userDataDir,
     chromeLaunchArgs: instance.chromeLaunchArgs,
@@ -562,6 +563,8 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
         if (suffix === '/json/list' || suffix === '/json') {
           const list = await fetchJson<ListTarget[]>(downstreamUrl);
+          // P1-6: cache page count on the instance for /api/instances responses
+          registry.update(instance.instanceId, {pageCount: list.length});
           json(
             response,
             200,
