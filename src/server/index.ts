@@ -80,7 +80,7 @@ function serializeInstance(
     chromeLaunchArgs: instance.chromeLaunchArgs,
     isDefault: instance.instanceId === defaultInstanceId,
   };
-  // P2-5: append connection metadata when request host is available
+      // P2-5: 请求 host 可用时附带连接元数据
   if (requestHost) {
     const prefix = `/instances/${instance.instanceId}`;
     base.instanceVersionUrl = `http://${requestHost}${prefix}/json/version`;
@@ -160,17 +160,17 @@ function resolvePublicHost(
  * @param options - 可选的环境变量覆盖和 logger 注入。
  */
 export async function createAutorouterServer(options: CreateServerOptions = {}) {
-  // Read package version once at startup for metadata injection.
-  // Works from both src/ (vitest) and dist/src/ (production) by walking up to find package.json.
+  // 从包根目录读取版本号，用于元数据注入。
+  // 源码和编译后的相对路径不同，因此尝试两个位置。
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
   const require = createRequire(import.meta.url);
-  // From src/index.ts → ../package.json; from dist/src/index.js → ../../package.json
+  // From src/server/index.ts → ../../package.json; from dist/src/server/index.js → ../../../package.json
   let packageVersion = '0.0.0';
   try {
-    ({version: packageVersion} = require(resolve(__dirname, '../package.json')));
-  } catch {
     ({version: packageVersion} = require(resolve(__dirname, '../../package.json')));
+  } catch {
+    ({version: packageVersion} = require(resolve(__dirname, '../../../package.json')));
   }
 
   const policy = loadEnvPolicy({...process.env, ...options.env});
@@ -190,7 +190,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
   const activeSockets = new Set<WebSocket>();
 
-  // Mutable default instance ID - initially from env, switchable at runtime via Admin API.
+  // 可变的默认实例 ID，初始值来自 env，运行时可通过 Admin API switch 命令切换。
   let currentDefaultInstanceId: string | undefined = policy.defaultInstanceTemplate?.instanceId;
 
   /**
@@ -265,10 +265,10 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   };
 
   /**
-   * Rewrite `devtoolsFrontendUrl` so that ws/wss query params point through autorouter.
+   * 改写 `devtoolsFrontendUrl`，使 ws/wss 查询参数指向 autorouter。
    *
-   * Handles both absolute (`http://host/devtools/...`) and relative (`/devtools/...`) formats.
-   * The `ws` or `wss` query param is replaced with the already-tokenized WS URL (host-only, no scheme).
+   * 同时处理绝对路径（`http://host/devtools/...`）和相对路径（`/devtools/...`）格式。
+   * ws/wss 查询参数被替换为已 token 化的 WS URL（仅 host 部分，无 scheme）。
    */
   const rewriteDevtoolsFrontendUrl = (
     originalUrl: string,
@@ -324,7 +324,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         ...entry,
         webSocketDebuggerUrl: rewrittenWsUrl,
       };
-      // P1-3: rewrite devtoolsFrontendUrl to point through autorouter
+      // P1-3: 改写 devtoolsFrontendUrl 使其指向 autorouter
       if (entry.devtoolsFrontendUrl) {
         result.devtoolsFrontendUrl = rewriteDevtoolsFrontendUrl(
           entry.devtoolsFrontendUrl,
@@ -563,7 +563,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
         if (suffix === '/json/list' || suffix === '/json') {
           const list = await fetchJson<ListTarget[]>(downstreamUrl);
-          // P1-6: cache page count on the instance for /api/instances responses
+          // P1-6: 缓存页面数到实例，供 /api/instances 响应使用
           registry.update(instance.instanceId, {pageCount: list.length});
           json(
             response,
@@ -592,7 +592,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         const downstreamUrl = `${instance.browserUrl}${downstreamPath}`;
         const upstream = await fetch(downstreamUrl);
 
-        // Hop-by-hop headers that must not be forwarded (RFC 2616 §13.5.1)
+        // Hop-by-hop 头不得转发（RFC 2616 §13.5.1）
         const hopByHop = new Set([
           'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
           'te', 'trailer', 'transfer-encoding', 'upgrade',
@@ -606,7 +606,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         }
 
         if (upstream.body) {
-          // Stream pipe: ReadableStream (web) → Node writable
+          // 流式转发：ReadableStream (web) → Node writable
           const reader = upstream.body.getReader();
           const pump = async (): Promise<void> => {
             const {done, value: chunk} = await reader.read();
