@@ -409,4 +409,28 @@ describe('HTTP compat proxy', () => {
       /^ws:\/\/127\.0\.0\.1:\d+\/instances\/default\/devtools\/browser$/,
     );
   });
+
+  // P1-5: non-JSON paths are transparently proxied to downstream Chrome.
+  test('proxies /devtools/* static assets transparently', async () => {
+    chrome = await startMockChromeServer();
+
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'default',
+        DEFAULT_INSTANCE_MODE: 'attached',
+        DEFAULT_INSTANCE_BROWSER_URL: chrome.origin,
+      },
+      logger: createSilentLogger(),
+    });
+
+    const response = await fetch(`${autorouter.origin}/devtools/inspector.html`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    const body = await response.text();
+    expect(body).toContain('devtools-mock');
+  });
 });

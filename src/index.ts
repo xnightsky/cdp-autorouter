@@ -35,7 +35,7 @@ interface ListTarget {
  * {@link createAutorouterServer} 接受的选项。
  *
  * `env` 用于测试中覆盖进程环境变量。
- * `logger` 可注入，使测试保持静默且结果确定。
+ * `logger` 可注入,使测试保持静默且结果确定。
  */
 interface CreateServerOptions {
   env?: NodeJS.ProcessEnv;
@@ -55,7 +55,7 @@ function isMainModule(): boolean {
 /**
  * 将完整运行时实例转换为对外暴露的 API 负载。
  *
- * 这里会剥离进程句柄等不可序列化的运行时引用，防止其通过 HTTP 泄漏。
+ * 这里会剥离进程句柄等不可序列化的运行时引用,防止其通过 HTTP 泄漏。
  */
 function serializeInstance(
   instance: RuntimeInstance,
@@ -89,7 +89,7 @@ function serializeInstance(
   return base;
 }
 
-/** 发送 JSON 响应，Content-Type 固定为 application/json。 */
+/** 发送 JSON 响应,Content-Type 固定为 application/json。 */
 function json(
   response: http.ServerResponse,
   statusCode: number,
@@ -155,7 +155,7 @@ function resolvePublicHost(
 /**
  * 构建 autorouter HTTP 服务器、WebSocket 代理、运行时注册表和关闭钩子。
  *
- * 返回的对象既是测试的入口点，也是 CLI 启动路径（`node dist/index.js`）使用的服务引导对象。
+ * 返回的对象既是测试的入口点,也是 CLI 启动路径(`node dist/index.js`)使用的服务引导对象。
  *
  * @param options - 可选的环境变量覆盖和 logger 注入。
  */
@@ -175,8 +175,8 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
   const policy = loadEnvPolicy({...process.env, ...options.env});
 
-  // 使用注入的 logger，或根据 env policy 构建一个。
-  // 测试中传入 silent logger，避免断言依赖 stderr 副作用。
+  // 使用注入的 logger,或根据 env policy 构建一个。
+  // 测试中传入 silent logger,避免断言依赖 stderr 副作用。
   const logger = options.logger ?? createLogger({
     level: policy.logLevel,
     format: policy.logFormat,
@@ -190,13 +190,13 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
   const activeSockets = new Set<WebSocket>();
 
-  // Mutable default instance ID — initially from env, switchable at runtime via Admin API.
+  // Mutable default instance ID - initially from env, switchable at runtime via Admin API.
   let currentDefaultInstanceId: string | undefined = policy.defaultInstanceTemplate?.instanceId;
 
   /**
    * 为 HTTP 或 WS 请求解析实例并确保其可用。
    *
-   * 根路径兼容路由隐式使用默认实例；显式路由使用路径中指定的注册表项。
+   * 根路径兼容路由隐式使用默认实例;显式路由使用路径中指定的注册表项。
    * 新创建或已停止的实例会按需懒启动。
    */
   const resolveInstance = async (
@@ -230,7 +230,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   };
 
   /**
-   * 改写下游浏览器 WebSocket URL，使客户端回连到 autorouter，
+   * 改写下游浏览器 WebSocket URL,使客户端回连到 autorouter,
    * 而非直接连接到真实 Chrome 实例。
    */
   const rewriteVersion = (
@@ -338,7 +338,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   };
 
   const server = http.createServer(async (request, response) => {
-    // 提前提取请求元数据，确保正常路径和 catch 块都能访问。
+    // 提前提取请求元数据,确保正常路径和 catch 块都能访问。
     const host = resolvePublicHost(request, policy);
     const url = new URL(request.url ?? '/', `http://${host}`);
     const path = url.pathname;
@@ -373,7 +373,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         return;
       }
 
-      // Admin API：返回 autorouter 的实例注册表，而非 Chrome 标签页。
+      // Admin API:返回 autorouter 的实例注册表,而非 Chrome 标签页。
       if (method === 'GET' && path === '/api/instances') {
         json(
           response,
@@ -387,7 +387,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         return;
       }
 
-      // Admin API：仅运行时创建实例，不做持久化。
+      // Admin API:仅运行时创建实例,不做持久化。
       if (method === 'POST' && path === '/api/instances') {
         const body = (await readJsonBody(request)) as Partial<RuntimeInstance>;
         if (!body.instanceId || !body.mode) {
@@ -410,7 +410,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         return;
       }
 
-      // Admin API：managed 浏览器的全局回收入口。
+      // Admin API:managed 浏览器的全局回收入口。
       if (method === 'POST' && path === '/api/instances/reclaim-managed') {
         await supervisor.reclaimManaged();
         json(response, 200, {reclaimed: true});
@@ -538,7 +538,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         }
       }
 
-      // HTTP 兼容路由：模拟 Chrome 远程调试端点。
+      // HTTP 兼容路由:模拟 Chrome 远程调试端点。
       const compatMatch = path.match(
         /^(?:\/instances\/([^/]+))?(\/json(?:\/version|\/list|\/protocol)?|\/json)$/,
       );
@@ -578,11 +578,62 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         return;
       }
 
-      // 无路由匹配 —— 返回结构化 404，让调用方区分"未知端点"和"实例不存在"。
+      // P1-5: 非 JSON 路径透明代理（/devtools/* 静态资源等）。
+      // 匹配可选实例前缀 + 任意非 /json、非 /api 路径。
+      const proxyMatch = path.match(/^(?:\/instances\/([^/]+))?(\/devtools\/.+)$/);
+      if (method === 'GET' && proxyMatch) {
+        const [, rawInstanceId, downstreamPath] = proxyMatch;
+        const instanceId = rawInstanceId ? decodeURIComponent(rawInstanceId) : undefined;
+        const instance = await resolveInstance(instanceId);
+        if (!instance.browserUrl) {
+          throw new Error(`Instance '${instance.instanceId}' does not have browserUrl for proxy.`);
+        }
+
+        const downstreamUrl = `${instance.browserUrl}${downstreamPath}`;
+        const upstream = await fetch(downstreamUrl);
+
+        // Hop-by-hop headers that must not be forwarded (RFC 2616 §13.5.1)
+        const hopByHop = new Set([
+          'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
+          'te', 'trailer', 'transfer-encoding', 'upgrade',
+        ]);
+
+        response.statusCode = upstream.status;
+        for (const [key, value] of upstream.headers.entries()) {
+          if (!hopByHop.has(key.toLowerCase())) {
+            response.setHeader(key, value);
+          }
+        }
+
+        if (upstream.body) {
+          // Stream pipe: ReadableStream (web) → Node writable
+          const reader = upstream.body.getReader();
+          const pump = async (): Promise<void> => {
+            const {done, value: chunk} = await reader.read();
+            if (done) {
+              response.end();
+              return;
+            }
+            const canContinue = response.write(chunk);
+            if (canContinue) {
+              return pump();
+            }
+            return new Promise(resolve => {
+              response.once('drain', () => resolve(pump()));
+            });
+          };
+          await pump();
+        } else {
+          response.end();
+        }
+        return;
+      }
+
+      // 无路由匹配 —— 返回结构化 404，让调用方区分“未知端点”和“实例不存在”。
       logger.warn('route not found', {method, path});
       error(response, 404, `Route not found: ${method} ${path}`);
     } catch (requestError) {
-      // 兜底：绝不向 HTTP 客户端泄漏堆栈跟踪。
+      // 兜底:绝不向 HTTP 客户端泄漏堆栈跟踪。
       const message = requestError instanceof Error ? requestError.message : String(requestError);
       logger.error('internal error', {path, error: message});
       error(response, 500, message);
@@ -603,7 +654,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         return;
       }
 
-      // 每个入站 WS token 必须早前由 rewriteVersion 或 rewriteList 生成；
+      // 每个入站 WS token 必须早前由 rewriteVersion 或 rewriteList 生成;
       // 这是保持真实 Chrome WS URL 不对外暴露的关键。
       const [, rawInstanceId, kind, token] = match;
       const binding = bindings.get(token ?? '');
@@ -684,8 +735,8 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   /**
    * 测试、CLI 启动和进程信号钩子共享的关闭路径。
    *
-   * 顺序很重要：
-   * 1. 关闭活跃 WS socket，让客户端收到干净断开。
+   * 顺序很重要:
+   * 1. 关闭活跃 WS socket,让客户端收到干净断开。
    * 2. 回收 managed 浏览器进程。
    * 3. 停止接受新的 HTTP 连接。
    * 4. 将待写入日志刷盘。
@@ -712,7 +763,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
     void shutdown();
   };
 
-  // v1 覆盖最常见的服务退出场景，防止本地运行后残留 managed 子浏览器。
+  // v1 覆盖最常见的服务退出场景,防止本地运行后残留 managed 子浏览器。
   process.once('SIGINT', closeHandler);
   process.once('SIGTERM', closeHandler);
   process.once('beforeExit', closeHandler);
@@ -733,7 +784,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
 if (isMainModule()) {
   const server = await createAutorouterServer();
-  // 使用结构化日志打印启动横幅，使其在 JSON 模式下仍可被查询。
+  // 使用结构化日志打印启动横幅,使其在 JSON 模式下仍可被查询。
   server.logger.info(`autorouter listening at ${server.origin}`, {
     host: server.policy.serverHost,
     port: server.policy.serverPort,

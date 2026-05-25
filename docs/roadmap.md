@@ -2,7 +2,7 @@
 
 本文档定义 `chrome-devtools-mcp-autorouter` 从当前 `v0.1.0` 向目标版本演进的完整路线图。
 
-对照基线是 `chrome-cdp-autorouter`(`D:\workspace\project\gwm\projtmpl\ai\browser\chrome-devtools\autorouter`),版本 `1.0.0`,以下简称"对照 repo"。
+对照基线是 `chrome-cdp-autorouter-=`(`D:\workspace\project\gwm\projtmpl\ai\browser\chrome-devtools\autorouter`),版本 `1.0.0`,以下简称"对照 repo"。
 
 ## 1. 已完成清单(v0.1.0)
 

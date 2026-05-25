@@ -52,6 +52,13 @@ export async function startMockChromeServer(): Promise<MockChromeServer> {
       return;
     }
 
+    // P1-5: serve a fake devtools static asset for transparent proxy testing
+    if (req.url?.startsWith('/devtools/')) {
+      res.writeHead(200, {'content-type': 'text/html'});
+      res.end('<html><body>devtools-mock</body></html>');
+      return;
+    }
+
     res.writeHead(404);
     res.end();
   });
