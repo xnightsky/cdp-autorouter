@@ -108,16 +108,15 @@
 
 **端口解析优先级**:`--port` flag > `AUTOROUTER_URL` 环境变量 > `.autorouter` 文件 > 默认 3100
 
-**Skill 加载机制(仿 agent-browser 三层架构)**:
+**Skill 加载机制(仿 agent-browser 架构)**:
 
 | 层 | 内容 | 加载时机 |
 |---|------|--------|
-| 1 薄引导 SKILL.md | 触发词 + "先运行 `autorouter-cli skills get`" | `npx skills add` 安装到 `~/.agents/skills/` |
-| 2 `autorouter-cli skills get <name>` | 完整命令用法、参数、典型流程 | agent 运行时动态调用 |
-| 3 skill-data/ 目录 | 完整 skill 内容源文件 | 打包在 npm 包内,随版本更新 |
+| 1 `skills/` 目录 | 完整 SKILL.md(触发词 + 命令参考 + 典型流程) | `npx skills add` 安装到 `~/.agents/skills/` |
+| 2 `autorouter-cli skills get <name>` | 输出同一份完整 skill 内容 | agent 运行时动态调用 |
 
 ```bash
-# 安装薄引导(一次性)
+# 安装 skill(一次性)
 npx skills add <our-repo>
 
 # agent 运行时动态加载完整指令
@@ -173,11 +172,11 @@ autorouter-cli --port 9300 list
 
 | # | 能力 | 对照 repo 现状 | 当前要做得更好的方向 |
 |---|------|--------------|---------------------|
-| P3.5-1 | **autorouter-cli 控制面客户端** | 无,控制面靠手动 curl | `connect`/`disconnect` 持久化连接;实例 CRUD 子命令;`--json` 输出模式供脚本消费;命令失败时返回结构化错误信息和修复建议 |
-| P3.5-2 | **get-ws 快速获取 wsEndpoint** | 无 | `autorouter-cli get-ws [id]` 输出实例的 wsEndpoint 到 stdout;可直接 `$()` 给 chrome-devtools-mcp 或 agent-browser 消费;无 id 时返回默认实例 |
+| P3.5-1 | **autorouter-cli 控制面客户端** | 无,控制面靠手动 curl | ✅ **已实现**:`connect`/`disconnect` 持久化连接;实例 CRUD 子命令;`--json` 输出模式供脚本消费;命令失败时返回结构化错误信息和修复建议 |
+| P3.5-2 | **get-ws 快速获取 wsEndpoint** | 无 | ✅ **已实现**:`autorouter-cli get-ws [id]` 输出实例的 wsEndpoint 到 stdout;可直接 `$()` 给 chrome-devtools-mcp 或 agent-browser 消费;无 id 时返回默认实例 |
 | P3.5-3 | **Skill 重写对齐当前 API** | Skill 引用旧端口 9223、旧路径 `/instanceN`、旧响应格式 | 重写 `chrome-devtools-ext-autorouter` skill 对齐当前 API(端口 3100、路径 `/instances/{id}`)。**与 `autorouter-cli` 不互斥**:有 CLI 时 agent 直接用 CLI 不需读 skill;无 CLI 时 skill 提供 bash+curl 降级方案。两者是同一控制面的两种消费形态,不是二选一 |
 | P3.5-4 | **Skill 自动感知 + CLI 发现** | 无 | `/json/version` 已注入 `autorouter` 元数据字段(P1-4 已实现);Skill 首次调用即可判断 autorouter 版本并选择对应操作路径 |
-| P3.5-5 | **`autorouter-cli skills` 子命令** | 无 | 仿 agent-browser 三层 skill 架构:1 薄引导 SKILL.md(`npx skills add` 安装,只含触发词 + "先 `autorouter-cli skills get`")2 `autorouter-cli skills get <name>` 运行时输出完整 skill(打包在 CLI 二进制中,版本永远一致)3 skill-data/ 目录存储完整内容 |
+| P3.5-5 | **`autorouter-cli skills` 子命令** | 无 | ✅ **已实现**:`skills/` 目录即是 `npx skills add` 的源也是 `autorouter-cli skills get` 的输出源，单层架构无中间层；随 npm 包版本发布 |
 | P3.5-6 | **CLI 作为 MCP tool 暴露**(可选) | 无 | 将 CLI 实例管理能力封装为 MCP tool,让 agent 通过 MCP 协议直接调用 |
 
 ### P4 - 安全性增强(当前 repo 已有 WS token 隔离,继续加固)
@@ -259,7 +258,7 @@ P3.5-1  autorouter-cli 控制面客户端(connect/disconnect/list/create/start/s
 P3.5-2  get-ws 快速获取 wsEndpoint
 P3.5-3  Skill 重写对齐当前 API
 P3.5-4  Skill 自动感知 + CLI 发现
-P3.5-5  autorouter-cli skills 子命令(仿 agent-browser 三层架构)
+P3.5-5  autorouter-cli skills 子命令(skills/ 单层架构)
 ```
 
 ### Phase 4:MCP 集成 + 可观测性(预计 P3 + P5)

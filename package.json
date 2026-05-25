@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "HTTP+WS autorouter between chrome-devtools-mcp and real Chrome instances",
+  "bin": {
+    "autorouter-cli": "./dist/src/cli/autorouter-cli.js"
+  },
   "main": "./dist/src/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
