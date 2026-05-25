@@ -1,8 +1,8 @@
 /**
- * Minimal JSON fetch helper for downstream Chrome HTTP endpoints.
+ * 下游 Chrome HTTP 端点的最小 JSON 请求封装。
  *
- * The compat layer uses only a handful of well-known JSON routes, so a small
- * wrapper is enough and keeps error reporting uniform.
+ * 兼容层只使用少量已知 JSON 路由，因此一个小封装就足够，
+ * 同时保持错误报告的统一性。
  */
 export async function fetchJson<T>(
   input: string | URL,

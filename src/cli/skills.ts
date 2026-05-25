@@ -1,7 +1,7 @@
 /**
- * skills subcommand — list and output skill content bundled with the CLI.
+ * skills 子命令 — 列出和输出打包在 CLI 中的 skill 内容。
  *
- * skills/ directory ships with the npm package; CLI reads full skill content from it.
+ * skills/ 目录随 npm 包发布，CLI 从中读取完整 skill 内容。
  */
 
 import fs from 'node:fs';
@@ -11,12 +11,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Locate skills directory.
- * Source run (tsx/vitest): __dirname = src/cli/ → 2 levels up to project root
- * Compiled run: __dirname = dist/src/cli/ → 3 levels up to project root
+ * 定位 skills 目录。
+ * 源码运行（tsx/vitest）：__dirname = src/cli/ → 向上 2 层到项目根
+ * 编译后运行：__dirname = dist/src/cli/ → 向上 3 层到项目根
  */
 function getSkillsDir(): string {
-  // Walk up from current location to find skills directory
+  // 从当前位置向上查找 skills 目录
   let dir = __dirname;
   for (let i = 0; i < 5; i++) {
     const candidate = path.join(dir, 'skills');
@@ -32,7 +32,7 @@ export interface SkillInfo {
   path: string;
 }
 
-/** List all available skills. */
+/** 列出所有可用 skills。 */
 export function listSkills(): SkillInfo[] {
   const dir = getSkillsDir();
   if (!fs.existsSync(dir)) return [];
@@ -44,7 +44,7 @@ export function listSkills(): SkillInfo[] {
     .map(e => ({ name: e.name, path: path.join(dir, e.name, 'SKILL.md') }));
 }
 
-/** Get full content of a single skill. */
+/** 获取单个 skill 的完整内容。 */
 export function getSkillContent(name: string): string | null {
   const dir = getSkillsDir();
   const skillPath = path.join(dir, name, 'SKILL.md');
@@ -52,7 +52,7 @@ export function getSkillContent(name: string): string | null {
   return fs.readFileSync(skillPath, 'utf8');
 }
 
-/** Get all skills content, joined with separators. */
+/** 获取所有 skills 的内容，以分隔符连接。 */
 export function getAllSkillsContent(): string {
   const skills = listSkills();
   if (skills.length === 0) return 'No skills available.';

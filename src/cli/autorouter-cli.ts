@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * autorouter-cli — Control plane client entry point.
+ * autorouter-cli — 控制面客户端入口。
  *
- * Manual argv parsing, zero extra dependencies.
+ * 手动解析 argv，零额外依赖。
  */
 
 import {
@@ -13,7 +13,9 @@ import {
 import * as api from './http-client.js';
 import { listSkills, getSkillContent, getAllSkillsContent } from './skills.js';
 
-// --- argv parsing utilities ---
+// --- argv 解析工具 ---
+
+/** 从 args 中提取并移除指定的命名参数，支持 `--name value` 和 `--name=value` 两种格式。 */
 
 function extractFlag(args: string[], name: string): string | undefined {
   for (let i = 0; i < args.length; i++) {
@@ -31,13 +33,14 @@ function extractFlag(args: string[], name: string): string | undefined {
   return undefined;
 }
 
+/** 检查并移除布尔标志（如 --json）。 */
 function hasFlag(args: string[], name: string): boolean {
   const idx = args.indexOf(name);
   if (idx >= 0) { args.splice(idx, 1); return true; }
   return false;
 }
 
-// --- output utilities ---
+// --- 输出工具 ---
 
 function printJson(data: unknown): void {
   process.stdout.write(JSON.stringify(data, null, 2) + '\n');
@@ -65,12 +68,12 @@ function printTable(rows: Record<string, unknown>[]): void {
   }
 }
 
-// --- main logic ---
+// --- 主逻辑 ---
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  // Global flags
+  // 全局参数：在命令解析前先提取，因为它们可以出现在命令前面
   const portStr = extractFlag(args, '--port');
   const portFlag = portStr ? parseInt(portStr, 10) : undefined;
   const jsonMode = hasFlag(args, '--json');
@@ -82,9 +85,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  // connect/disconnect are local-only (no network)
+  // connect/disconnect 是纯本地操作，不需要网络
   if (command === 'connect') {
-    // connect takes a positional port arg (the port to persist)
+    // connect 的位置参数是要持久化的端口号
     const port = parseInt(args[0] ?? String(portFlag ?? 3100), 10);
     if (!port || port <= 0) {
       printError('Invalid port number');
@@ -106,13 +109,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  // skills subcommand is local-only (no network)
+  // skills 子命令是纯本地操作，不需要网络
   if (command === 'skills') {
     handleSkills(args, jsonMode);
     return;
   }
 
-  // Commands requiring network
+  // 以下命令需要连接 autorouter 服务
   const endpoint = resolveEndpoint({ portFlag });
   const baseUrl = endpoint.baseUrl;
 
@@ -213,10 +216,10 @@ async function main(): Promise<void> {
     }
 
     case 'get-ws': {
-      const id = args[0]; // optional — omit for default instance
+      const id = args[0]; // 可选，省略时返回默认实例
       const res = await api.getWsEndpoint(baseUrl, id);
       if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
-      // get-ws always outputs a single ws:// line to stdout
+      // get-ws 始终只输出一行 ws:// 地址，可直接 $() 给工具消费
       process.stdout.write(res.data + '\n');
       return;
     }

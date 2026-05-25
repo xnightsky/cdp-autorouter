@@ -1,7 +1,7 @@
 /**
  * CLI 端口解析模块。
  *
- * Priority: --port flag > AUTOROUTER_URL env > .autorouter file (upward search) > default 3100
+ * 优先级：--port flag > AUTOROUTER_URL 环境变量 > .autorouter 文件（向上查找） > 默认 3100
  */
 
 import fs from 'node:fs';
@@ -32,7 +32,7 @@ export function findConfigFile(startDir: string): string | null {
   return null;
 }
 
-/** Read port from .autorouter JSON file. */
+/** 从 .autorouter JSON 文件读取端口。 */
 export function readConfigFile(filePath: string): number | null {
   try {
     const content = fs.readFileSync(filePath, 'utf8');
@@ -41,19 +41,19 @@ export function readConfigFile(filePath: string): number | null {
       return parsed.port;
     }
   } catch {
-    // Corrupted or unreadable file, ignore
+    // 文件损坏或不可读，忽略
   }
   return null;
 }
 
-/** Write .autorouter config file. */
+/** 写入 .autorouter 配置文件。 */
 export function writeConfigFile(dir: string, port: number): string {
   const filePath = path.join(dir, CONFIG_FILENAME);
   fs.writeFileSync(filePath, JSON.stringify({ port }, null, 2) + '\n', 'utf8');
   return filePath;
 }
 
-/** Remove .autorouter config file. */
+/** 删除 .autorouter 配置文件。 */
 export function removeConfigFile(startDir: string): boolean {
   const found = findConfigFile(startDir);
   if (found) {
@@ -63,7 +63,7 @@ export function removeConfigFile(startDir: string): boolean {
   return false;
 }
 
-/** Parse port from AUTOROUTER_URL env var. */
+/** 从 AUTOROUTER_URL 环境变量解析端口。 */
 function parseEnvUrl(envUrl: string | undefined): number | null {
   if (!envUrl) return null;
   try {
@@ -71,7 +71,7 @@ function parseEnvUrl(envUrl: string | undefined): number | null {
     const port = parseInt(url.port, 10);
     return port > 0 ? port : null;
   } catch {
-    // Try plain number
+    // 尝试纯数字
     const num = parseInt(envUrl, 10);
     return num > 0 ? num : null;
   }
