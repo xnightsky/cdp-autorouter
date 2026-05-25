@@ -39,6 +39,7 @@ export async function startMockChromeServer(): Promise<MockChromeServer> {
             type: 'page',
             url: 'https://example.com',
             webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/mock-page-id`,
+            devtoolsFrontendUrl: `http://127.0.0.1:${port}/devtools/inspector.html?ws=127.0.0.1:${port}/devtools/page/mock-page-id`,
           },
         ]),
       );

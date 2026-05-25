@@ -1,3 +1,6 @@
+import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
+import {dirname, resolve} from 'node:path';
 import http from 'node:http';
 import {AddressInfo} from 'node:net';
 import {URL} from 'node:url';
@@ -24,6 +27,7 @@ interface VersionResponse {
 /** 从下游 `/json/list` 和 `/json` 取出的最小字段集。 */
 interface ListTarget {
   webSocketDebuggerUrl?: string;
+  devtoolsFrontendUrl?: string;
   [key: string]: unknown;
 }
 
@@ -122,6 +126,19 @@ function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
  * @param options - 可选的环境变量覆盖和 logger 注入。
  */
 export async function createAutorouterServer(options: CreateServerOptions = {}) {
+  // Read package version once at startup for metadata injection.
+  // Works from both src/ (vitest) and dist/src/ (production) by walking up to find package.json.
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
+  const require = createRequire(import.meta.url);
+  // From src/index.ts → ../package.json; from dist/src/index.js → ../../package.json
+  let packageVersion = '0.0.0';
+  try {
+    ({version: packageVersion} = require(resolve(__dirname, '../package.json')));
+  } catch {
+    ({version: packageVersion} = require(resolve(__dirname, '../../package.json')));
+  }
+
   const policy = loadEnvPolicy({...process.env, ...options.env});
 
   // 使用注入的 logger，或根据 env policy 构建一个。
@@ -138,6 +155,9 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   const wsServer = new WebSocketServer({noServer: true});
 
   const activeSockets = new Set<WebSocket>();
+
+  // Mutable default instance ID — initially from env, switchable at runtime via Admin API.
+  let currentDefaultInstanceId: string | undefined = policy.defaultInstanceTemplate?.instanceId;
 
   /**
    * 为 HTTP 或 WS 请求解析实例并确保其可用。
@@ -185,8 +205,17 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
     routeInstanceId?: string,
     bindingInstanceId?: string,
   ) => {
+    const defaultInstanceId = currentDefaultInstanceId ?? null;
+    const autorouterMeta = {
+      name: 'chrome-devtools-mcp-autorouter',
+      version: packageVersion,
+      multiInstance: true,
+      defaultInstanceId,
+      capabilitiesEndpoint: `http://${requestHost}/api/capabilities`,
+    };
+
     if (!payload.webSocketDebuggerUrl) {
-      return payload;
+      return {...payload, autorouter: autorouterMeta};
     }
     const binding = bindings.register(
       bindingInstanceId ?? defaultResolver.ensureDefaultInstance().instanceId,
@@ -197,11 +226,48 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
     return {
       ...payload,
       webSocketDebuggerUrl: `ws://${requestHost}${prefix}/devtools/browser/${binding.token}`,
+      autorouter: autorouterMeta,
     };
   };
 
   /**
-   * 改写 `/json/list` 或 `/json` 返回的每个目标 WebSocket URL。
+   * Rewrite `devtoolsFrontendUrl` so that ws/wss query params point through autorouter.
+   *
+   * Handles both absolute (`http://host/devtools/...`) and relative (`/devtools/...`) formats.
+   * The `ws` or `wss` query param is replaced with the already-tokenized WS URL (host-only, no scheme).
+   */
+  const rewriteDevtoolsFrontendUrl = (
+    originalUrl: string,
+    requestHost: string,
+    rewrittenWsUrl: string,
+    instancePrefix: string,
+  ): string => {
+    const isAbsolute = /^https?:\/\//i.test(originalUrl);
+    const parsed = new URL(originalUrl, 'http://placeholder');
+
+    // Rewrite pathname to include instance prefix if it starts with /devtools/
+    if (parsed.pathname.startsWith('/devtools/')) {
+      parsed.pathname = `${instancePrefix}${parsed.pathname}`;
+    }
+
+    // Replace ws/wss query param with the tokenized autorouter WS address
+    const wsHost = rewrittenWsUrl.replace(/^wss?:\/\//, '');
+    for (const key of ['ws', 'wss']) {
+      if (parsed.searchParams.has(key)) {
+        parsed.searchParams.set(key, wsHost);
+      }
+    }
+
+    if (isAbsolute) {
+      parsed.protocol = 'http:';
+      parsed.host = requestHost;
+      return parsed.toString();
+    }
+    return `${parsed.pathname}${parsed.search}`;
+  };
+
+  /**
+   * 改写 `/json/list` 或 `/json` 返回的每个目标 WebSocket URL 和 devtoolsFrontendUrl。
    */
   const rewriteList = (
     payload: ListTarget[],
@@ -219,10 +285,21 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         entry.webSocketDebuggerUrl,
         'page',
       );
-      return {
+      const rewrittenWsUrl = `ws://${requestHost}${prefix}/devtools/page/${binding.token}`;
+      const result: ListTarget = {
         ...entry,
-        webSocketDebuggerUrl: `ws://${requestHost}${prefix}/devtools/page/${binding.token}`,
+        webSocketDebuggerUrl: rewrittenWsUrl,
       };
+      // P1-3: rewrite devtoolsFrontendUrl to point through autorouter
+      if (entry.devtoolsFrontendUrl) {
+        result.devtoolsFrontendUrl = rewriteDevtoolsFrontendUrl(
+          entry.devtoolsFrontendUrl,
+          requestHost,
+          rewrittenWsUrl,
+          prefix,
+        );
+      }
+      return result;
     });
   };
 
@@ -236,6 +313,32 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
     try {
       logger.debug('processing request', {method, path});
 
+      // Admin API: service capabilities and endpoint discovery.
+      if (method === 'GET' && path === '/api/capabilities') {
+        json(response, 200, {
+          name: 'chrome-devtools-mcp-autorouter',
+          version: packageVersion,
+          capabilities: {
+            multiInstance: true,
+            instanceRouting: true,
+            defaultInstanceSwitch: true,
+            managementApi: true,
+            compatibilityMode: policy.compatModeEnabled,
+            wsTokenIsolation: true,
+            supportedModes: ['managed', 'attached'],
+          },
+          endpoints: {
+            instances: `http://${host}/api/instances`,
+            capabilities: `http://${host}/api/capabilities`,
+          },
+          runtime: {
+            totalInstances: registry.list().length,
+            defaultInstanceId: currentDefaultInstanceId ?? null,
+          },
+        });
+        return;
+      }
+
       // Admin API：返回 autorouter 的实例注册表，而非 Chrome 标签页。
       if (method === 'GET' && path === '/api/instances') {
         json(
@@ -244,7 +347,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
           registry
             .list()
             .map(instance =>
-              serializeInstance(instance, policy.defaultInstanceTemplate?.instanceId),
+              serializeInstance(instance, currentDefaultInstanceId),
             ),
         );
         return;
@@ -269,7 +372,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
           remoteDebuggingPort: body.remoteDebuggingPort,
           executablePath: body.executablePath,
         });
-        json(response, 201, serializeInstance(instance, policy.defaultInstanceTemplate?.instanceId));
+        json(response, 201, serializeInstance(instance, currentDefaultInstanceId));
         return;
       }
 
@@ -281,7 +384,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
       }
 
       const instanceActionMatch = path.match(
-        /^\/api\/instances\/([^/]+)(?:\/(start|stop|refresh|health|extensions))?$/,
+        /^\/api\/instances\/([^/]+)(?:\/(start|stop|refresh|health|extensions|switch))?$/,
       );
       if (instanceActionMatch) {
         const [, rawInstanceId, action] = instanceActionMatch;
@@ -292,7 +395,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             200,
             serializeInstance(
               registry.require(instanceId),
-              policy.defaultInstanceTemplate?.instanceId,
+              currentDefaultInstanceId,
             ),
           );
           return;
@@ -304,7 +407,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             200,
             serializeInstance(
               registry.update(instanceId, body),
-              policy.defaultInstanceTemplate?.instanceId,
+              currentDefaultInstanceId,
             ),
           );
           return;
@@ -320,7 +423,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             200,
             serializeInstance(
               await supervisor.start(registry.require(instanceId)),
-              policy.defaultInstanceTemplate?.instanceId,
+              currentDefaultInstanceId,
             ),
           );
           return;
@@ -332,7 +435,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             200,
             serializeInstance(
               registry.require(instanceId),
-              policy.defaultInstanceTemplate?.instanceId,
+              currentDefaultInstanceId,
             ),
           );
           return;
@@ -343,7 +446,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             200,
             serializeInstance(
               await supervisor.refresh(instanceId),
-              policy.defaultInstanceTemplate?.instanceId,
+              currentDefaultInstanceId,
             ),
           );
           return;
@@ -364,6 +467,16 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
             instanceId: instance.instanceId,
             extensions: instance.extensionsSummary,
           });
+          return;
+        }
+        if (method === 'POST' && action === 'switch') {
+          const instance = registry.require(instanceId);
+          if (instance.status !== 'healthy') {
+            error(response, 409, `Cannot switch to instance '${instanceId}': status is '${instance.status}', must be 'healthy'.`);
+            return;
+          }
+          currentDefaultInstanceId = instanceId;
+          json(response, 200, serializeInstance(instance, currentDefaultInstanceId));
           return;
         }
       }

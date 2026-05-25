@@ -52,6 +52,46 @@ describe('HTTP compat proxy', () => {
       /^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/.+$/,
     );
     expect(payload.webSocketDebuggerUrl).not.toContain('9222');
+
+    // P1-4: autorouter metadata injection
+    const meta = (payload as Record<string, unknown>).autorouter as {
+      name: string;
+      version: string;
+      multiInstance: boolean;
+      defaultInstanceId: string | null;
+      capabilitiesEndpoint: string;
+    };
+    expect(meta).toBeDefined();
+    expect(meta.name).toBe('chrome-devtools-mcp-autorouter');
+    expect(meta.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(meta.multiInstance).toBe(true);
+    expect(meta.defaultInstanceId).toBe('default');
+    expect(meta.capabilitiesEndpoint).toMatch(/\/api\/capabilities$/);
+  });
+
+  // P2-1: GET /api/capabilities returns service metadata and endpoint discovery.
+  test('GET /api/capabilities returns service metadata', async () => {
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'main',
+      },
+      logger: createSilentLogger(),
+    });
+
+    const response = await fetch(`${autorouter.origin}/api/capabilities`);
+    expect(response.status).toBe(200);
+
+    const caps = (await response.json()) as Record<string, unknown>;
+    expect(caps.name).toBe('chrome-devtools-mcp-autorouter');
+    expect(caps.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect((caps.capabilities as Record<string, unknown>).multiInstance).toBe(true);
+    expect((caps.capabilities as Record<string, unknown>).wsTokenIsolation).toBe(true);
+    expect((caps.capabilities as Record<string, unknown>).supportedModes).toEqual(['managed', 'attached']);
+    expect((caps.endpoints as Record<string, unknown>).instances).toMatch(/\/api\/instances$/);
+    expect((caps.runtime as Record<string, unknown>).defaultInstanceId).toBe('main');
   });
 
   // 保护设计阶段曾混淆的 API 边界：Admin API 列出的是 autorouter 实例，不是 Chrome 页面。
@@ -232,5 +272,79 @@ describe('HTTP compat proxy', () => {
     expect(payload.webSocketDebuggerUrl).toMatch(
       /^ws:\/\/127\.0\.0\.1:\d+\/instances\/alpha\/devtools\/browser\/.+$/,
     );
+  });
+
+  // P1-3: devtoolsFrontendUrl must be rewritten to point through autorouter.
+  test('rewrites devtoolsFrontendUrl in /json/list to use autorouter host and token', async () => {
+    chrome = await startMockChromeServer();
+
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'default',
+        DEFAULT_INSTANCE_MODE: 'attached',
+        DEFAULT_INSTANCE_BROWSER_URL: chrome.origin,
+      },
+      logger: createSilentLogger(),
+    });
+
+    const response = await fetch(`${autorouter.origin}/json/list`);
+    expect(response.status).toBe(200);
+
+    const list = (await response.json()) as Array<{
+      webSocketDebuggerUrl: string;
+      devtoolsFrontendUrl: string;
+    }>;
+
+    expect(list.length).toBeGreaterThan(0);
+    const target = list[0];
+
+    // devtoolsFrontendUrl should point to autorouter, not downstream Chrome
+    expect(target.devtoolsFrontendUrl).not.toContain('9222');
+    expect(target.devtoolsFrontendUrl).toMatch(/127\.0\.0\.1:\d+/);
+    // ws query param should contain the tokenized path (URL-encoded)
+    expect(target.devtoolsFrontendUrl).toMatch(/ws=127\.0\.0\.1%3A\d+%2Fdevtools%2Fpage%2F/);
+    // Should not expose the original mock-page-id
+    expect(target.devtoolsFrontendUrl).not.toContain('mock-page-id');
+  });
+
+  // P2-3: POST /api/instances/{id}/switch changes the default instance.
+  test('switches default instance via Admin API', async () => {
+    chrome = await startMockChromeServer();
+
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'original',
+        DEFAULT_INSTANCE_MODE: 'attached',
+        DEFAULT_INSTANCE_BROWSER_URL: chrome.origin,
+      },
+      logger: createSilentLogger(),
+    });
+
+    // Create a second instance and start it
+    await fetch(`${autorouter.origin}/api/instances`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({instanceId: 'second', mode: 'attached', browserUrl: chrome.origin}),
+    });
+    await fetch(`${autorouter.origin}/api/instances/second/start`, {method: 'POST'});
+
+    // Switch default to 'second'
+    const switchRes = await fetch(`${autorouter.origin}/api/instances/second/switch`, {method: 'POST'});
+    expect(switchRes.status).toBe(200);
+    const switched = (await switchRes.json()) as {isDefault: boolean};
+    expect(switched.isDefault).toBe(true);
+
+    // Verify capabilities now reports 'second' as default
+    const capsRes = await fetch(`${autorouter.origin}/api/capabilities`);
+    const caps = (await capsRes.json()) as {runtime: {defaultInstanceId: string}};
+    expect(caps.runtime.defaultInstanceId).toBe('second');
   });
 });
