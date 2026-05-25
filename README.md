@@ -2,23 +2,26 @@
 
 ## Quick Start
 
-所有玩法的共同前置：
+所有玩法的共同前置（在项目根目录执行）：
 
 ```bash
+# cd <项目根目录>
 npm install && npm run build
-npm start   # 启动 autorouter，默认端口 3100
+npm install -g .               # 注册 autorouter-cli 到全局 PATH
+npm start                      # 启动服务，端口由 .env SERVER_PORT 决定（默认 3100）
 ```
+
+以下命令均为全局可用，任意目录执行：
 
 ---
 
 ### ⭐ 推荐玩法：autorouter + CLI + agent-browser
 
 ```bash
-# 安装 CLI（开发期）
-npm link
+# 以下均为全局命令，任意目录执行
 
-# 连接到 autorouter
-autorouter-cli connect 3100
+# 连接到 autorouter（端口与 SERVER_PORT 一致）
+autorouter-cli connect <port>
 
 # 创建并启动实例
 autorouter-cli create --id dev --mode attached --browser-url http://localhost:9222
@@ -40,14 +43,14 @@ chrome-devtools-mcp --wsEndpoint=$(autorouter-cli get-ws dev)
 适合：无 CLI 环境、CI 脚本、快速验证。
 
 ```bash
-curl -X POST http://localhost:3100/api/instances \
+curl -X POST http://localhost:<port>/api/instances \
   -H 'Content-Type: application/json' \
   -d '{"instanceId":"dev","mode":"attached","browserUrl":"http://localhost:9222"}'
 
-curl -X POST http://localhost:3100/api/instances/dev/start
+curl -X POST http://localhost:<port>/api/instances/dev/start
 
 # 提取 wsEndpoint
-curl -s http://localhost:3100/instances/dev/json/version | jq -r .webSocketDebuggerUrl
+curl -s http://localhost:<port>/instances/dev/json/version | jq -r .webSocketDebuggerUrl
 ```
 
 ---
