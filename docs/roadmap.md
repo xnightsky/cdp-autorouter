@@ -52,11 +52,11 @@
 
 | # | 能力 | 对照 repo 现状 | 当前要做得更好的方向 |
 |---|------|--------------|---------------------|
-| P0-1 | **Logger 系统** | `src/logger.js`:文件 + 控制台双写,ANSI 颜色,level 过滤,调用方透明注入 | 重写为 TypeScript,保持文件 + 控制台双通道;增加 `--log-level` 环境变量控制(silent/error/warn/info/debug);支持结构化 JSON 输出模式供日志采集;SIGINT/SIGTERM 时确保 flush 最后日志 |
-| P0-2 | **CLI 启动入口** | `src/cli/start.js`:参数解析 → 配置加载 → 启动服务 | 统一 CLI 参数模型(`--config`、`--port`、`--host`、`--log-level`);命令行参数优先级 > `.env`;打印启动摘要(监听地址、默认实例、compat 模式状态) |
-| P0-3 | **CLI 配置初始化** | `src/cli/config-init.js`:从模板创建 `.env.yaml` | 生成 `.env.example` 模板文件;`--force` 覆盖已有配置;交互式引导(可选) |
-| P0-4 | **CLI 验证脚本** | `src/cli/verify.js` + `src/verify.js`:5 步健康检查 | 增强为 7 步:增加 WS 代理连通性检查、默认实例懒加载验证;验证结果以结构化 JSON 输出;支持 `--json` 输出模式;失败时给出修复建议 |
-| P0-5 | **YAML 配置支持**(可选) | `.env.yaml` + `yaml` 依赖 | 当前 `.env` 已足够 v1,作为可选增强:若检测到 `.env.yaml` 存在则优先使用 YAML;YAML 支持嵌套结构(server/autorouter/verify 分层);配置校验给出字段级错误提示 |
+| P0-1 | **Logger 系统** | `src/logger.js`:文件 + 控制台双写,ANSI 颜色,level 过滤,调用方透明注入 | ✅ 已实现(logger.ts):文件 + 控制台双通道;支持 LOG_LEVEL/LOG_FORMAT/LOG_FILE 环境变量 |
+| ~~P0-2~~ | ~~CLI 启动入口~~ | - | **已取消**:直接用 `npm start` 或包装 shell 脚本启动,不需额外 CLI 入口 |
+| ~~P0-3~~ | ~~CLI 配置初始化~~ | - | **已取消**:`.env` 模板已足够 |
+| ~~P0-4~~ | ~~CLI 验证脚本~~ | - | **已取消**:健康检查通过 `autorouter-cli status` 实现 |
+| P0-5 | **YAML 配置支持**(可选) | `.env.yaml` + `yaml` 依赖 | 当前 `.env` 已足够 v1,作为可选增强 |
 
 ### P1 - HTTP 代理增强(对标对照 repo 的 router.js 能力)
 
@@ -106,18 +106,18 @@
 - CLI 通过 `connect [port]` 持久化连接信息,后续命令无需重复指定端口
 - `get-ws [id]` 命令输出实例的 wsEndpoint,可直接 `$()` 给 mcp/agent-browser 消费
 
-**端口解析优先级**：`--port` flag > `AUTOROUTER_URL` 环境变量 > `.autorouter` 文件 > 默认 3100
+**端口解析优先级**:`--port` flag > `AUTOROUTER_URL` 环境变量 > `.autorouter` 文件 > 默认 3100
 
-**Skill 加载机制（仿 agent-browser 三层架构）**：
+**Skill 加载机制(仿 agent-browser 三层架构)**:
 
 | 层 | 内容 | 加载时机 |
 |---|------|--------|
-| ① 薄引导 SKILL.md | 触发词 + "先运行 `autorouter-cli skills get`" | `npx skills add` 安装到 `~/.agents/skills/` |
-| ② `autorouter-cli skills get <name>` | 完整命令用法、参数、典型流程 | agent 运行时动态调用 |
-| ③ skill-data/ 目录 | 完整 skill 内容源文件 | 打包在 npm 包内，随版本更新 |
+| 1 薄引导 SKILL.md | 触发词 + "先运行 `autorouter-cli skills get`" | `npx skills add` 安装到 `~/.agents/skills/` |
+| 2 `autorouter-cli skills get <name>` | 完整命令用法、参数、典型流程 | agent 运行时动态调用 |
+| 3 skill-data/ 目录 | 完整 skill 内容源文件 | 打包在 npm 包内,随版本更新 |
 
 ```bash
-# 安装薄引导（一次性）
+# 安装薄引导(一次性)
 npx skills add <our-repo>
 
 # agent 运行时动态加载完整指令
@@ -127,7 +127,7 @@ autorouter-cli skills get autorouter-mcp     # 输出 MCP 包装器 skill
 autorouter-cli skills get --all              # 输出所有
 ```
 
-**与 `chrome-devtools-ext-autorouter` skill 的关系**：不互斥。有 CLI 时 agent 直接用 CLI（不需读 skill）；无 CLI 时 skill 提供 bash+curl 降级方案。两者是同一控制面的两种消费形态。
+**与 `chrome-devtools-ext-autorouter` skill 的关系**:不互斥。有 CLI 时 agent 直接用 CLI(不需读 skill);无 CLI 时 skill 提供 bash+curl 降级方案。两者是同一控制面的两种消费形态。
 
 **bin 布局**:
 
@@ -213,17 +213,14 @@ autorouter-cli --port 9300 list
 
 ## 3. 实现计划
 
-### Phase 1:工程化基础(预计 P0 + P6 部分)
+### Phase 1：工程化基础（P0 + P6 部分）
 
-**目标**:让项目有 CLI 可启动、有日志可排查、有 lint 可约束。
+**目标**：有日志可排查、有 lint 可约束。启动直接 `npm start`。
 
 ```
-P0-1  Logger 系统
-P0-2  CLI 启动入口
-P0-3  CLI 配置初始化
+P0-1  Logger 系统 ✅
 P6-1  ESLint + Prettier
 P6-2  pre-commit hook
-P0-4  CLI 验证脚本
 ```
 
 ### Phase 2:HTTP 代理增强(预计 P1)
