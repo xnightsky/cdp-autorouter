@@ -94,7 +94,7 @@ export class ChildBrowserSupervisor {
 
     const child = spawn(executablePath, args, {
       stdio: 'ignore',
-      windowsHide: true,
+      windowsHide: instance.headless ?? false,
       detached: process.platform !== 'win32',
     });
 
