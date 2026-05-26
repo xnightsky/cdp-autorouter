@@ -698,8 +698,8 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         const downstreamSocket = new WebSocket(binding.downstreamWsUrl);
         activeSockets.add(clientSocket);
         supervisor.trackConnection(binding.instanceId, clientSocket);
-        // 在下游 WebSocket 就绪前缓冲客户端的早期消息。
-        const pendingMessages: Buffer[] = [];
+        // Buffer client messages until downstream is ready.
+        const pendingMessages: {data: Buffer; binary: boolean}[] = [];
 
         const dispose = () => {
           activeSockets.delete(clientSocket);
@@ -712,23 +712,24 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
           }
         };
 
-        clientSocket.on('message', data => {
+        clientSocket.on('message', (data, isBinary) => {
           if (downstreamSocket.readyState === WebSocket.OPEN) {
-            downstreamSocket.send(data);
+            downstreamSocket.send(data, {binary: isBinary});
           } else {
-            pendingMessages.push(
-              Buffer.isBuffer(data) ? data : Buffer.from(data.toString()),
-            );
+            pendingMessages.push({
+              data: Buffer.isBuffer(data) ? data : Buffer.from(data.toString()),
+              binary: isBinary,
+            });
           }
         });
         downstreamSocket.on('open', () => {
-          for (const message of pendingMessages.splice(0)) {
-            downstreamSocket.send(message);
+          for (const msg of pendingMessages.splice(0)) {
+            downstreamSocket.send(msg.data, {binary: msg.binary});
           }
         });
-        downstreamSocket.on('message', data => {
+        downstreamSocket.on('message', (data, isBinary) => {
           if (clientSocket.readyState === WebSocket.OPEN) {
-            clientSocket.send(data);
+            clientSocket.send(data, {binary: isBinary});
           }
         });
         clientSocket.on('close', dispose);
