@@ -12,8 +12,22 @@ import {resolveEnvFile} from '../src/server/config.js';
 const envPath = path.resolve('.env');
 
 describe('env policy loading', () => {
+  let originalEnvContent: string | null = null;
+
+  beforeEach(async () => {
+    try {
+      originalEnvContent = await fs.readFile(envPath, 'utf8');
+    } catch {
+      originalEnvContent = null;
+    }
+  });
+
   afterEach(async () => {
-    await fs.rm(envPath, {force: true});
+    if (originalEnvContent !== null) {
+      await fs.writeFile(envPath, originalEnvContent, 'utf8');
+    } else {
+      await fs.rm(envPath, {force: true});
+    }
   });
 
   // 锁定预期优先级：正常服务启动时无需注入覆盖即可读取本地 `.env` 值。

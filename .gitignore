@@ -12,6 +12,7 @@ coverage/
 .env
 .env.*
 !.env.example
+.autorouter
 
 # logs
 *.log
