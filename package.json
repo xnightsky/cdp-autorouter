@@ -20,6 +20,8 @@
   "main": "./dist/src/server/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "install:global": "npm run build && npm install -g .",
     "dev": "tsx src/server/index.ts",
     "start": "node dist/src/server/index.js",
     "test": "vitest run",

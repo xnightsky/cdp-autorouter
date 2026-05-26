@@ -29,10 +29,13 @@ chrome-devtools-mcp -> autorouter (HTTP + WS) -> real Chrome instance
 
 ```bash
 # cd <项目根目录>
-npm install && npm run build
-npm install -g .               # 注册 cdp-autorouter-server / cdp-autorouter-cli 到全局 PATH
+npm install                    # 安装依赖
+npm run install:global         # 一条命令：build + 全局安装 cdp-autorouter-server / cdp-autorouter-cli
 npm start                      # 启动服务，端口由 .env SERVER_PORT 决定（默认 3100）
 ```
+
+> `npm install -g .` 不会自动触发 build（npm 不为本地目录安装走 pack 流程）。
+> 必须先 `npm run build` 再 `npm install -g .`，或直接用 `npm run install:global` 一步到位。
 
 如果只想本地开发，不需要全局安装 CLI：
 
