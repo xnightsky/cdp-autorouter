@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 
+import {detectChromePath} from './detect-chrome.js';
 import {fetchJson} from './http-client.js';
 import {RuntimeRegistry} from './runtime-registry.js';
 import type {Logger, RuntimeInstance} from './types.js';
@@ -66,12 +67,13 @@ export class ChildBrowserSupervisor {
     }
 
     const executablePath =
-      instance.executablePath || process.env.CHROME_EXECUTABLE_PATH;
+      instance.executablePath || process.env.CHROME_EXECUTABLE_PATH || detectChromePath();
     if (!executablePath) {
       throw new Error(
-        `Managed instance '${instance.instanceId}' requires executablePath or CHROME_EXECUTABLE_PATH.`,
+        `Managed instance '${instance.instanceId}' requires executablePath or CHROME_EXECUTABLE_PATH (auto-detect also failed).`,
       );
     }
+    this.logger?.info('using chrome executable', {instanceId: instance.instanceId, executablePath});
 
     let userDataDir = instance.userDataDir;
     let autoCreatedUserDataDir = false;
