@@ -85,7 +85,13 @@ export class ChildBrowserSupervisor {
     }
 
     const port = instance.remoteDebuggingPort ?? (await findAvailablePort());
+    // Baseline args for all managed instances: suppress first-run UI that spawns
+    // an extra welcome window (chrome://intro), which confuses process accounting.
+    // Only injected when the executable looks like a Chrome/Chromium binary.
+    const isChrome = /chrome|chromium/i.test(executablePath);
+    const baselineArgs = isChrome ? ['--no-first-run', '--no-default-browser-check'] : [];
     const args = [
+      ...baselineArgs,
       ...instance.chromeLaunchArgs,
       `--remote-debugging-port=${port}`,
       `--user-data-dir=${userDataDir}`,
