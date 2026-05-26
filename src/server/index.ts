@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {createRequire} from 'node:module';
-import {fileURLToPath} from 'node:url';
+import {realpathSync} from 'node:fs';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve} from 'node:path';
 import http from 'node:http';
 import {AddressInfo} from 'node:net';
@@ -49,8 +50,26 @@ function isMainModule(): boolean {
     return false;
   }
 
-  const entryUrl = new URL(`file://${entryArg.replace(/\\/g, '/')}`);
-  return import.meta.url === entryUrl.href;
+  // Two pitfalls when comparing import.meta.url with argv[1]:
+  // 1. percent-encoding (spaces, ~1 short names, non-ASCII)
+  // 2. symlinks: import.meta.url follows the symlink to the real path,
+  //    while argv[1] keeps the symlink path. This breaks `npm install -g`
+  //    on Windows, where the global package is a junction into the repo.
+  // Resolve both sides through realpathSync to normalize symlinks before
+  // comparing, then go through pathToFileURL for consistent encoding.
+  let metaPath: string;
+  try {
+    metaPath = realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+  let argvPath: string;
+  try {
+    argvPath = realpathSync(entryArg);
+  } catch {
+    return false;
+  }
+  return pathToFileURL(metaPath).href === pathToFileURL(argvPath).href;
 }
 
 /**
