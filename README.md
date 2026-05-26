@@ -23,28 +23,78 @@ chrome-devtools-mcp -> autorouter (HTTP + WS) -> real Chrome instance
 - npm
 - Chrome / Chromium（`managed` 模式需要可执行文件，`attached` 模式需要已有远程调试端点）
 
-## 两端口模型（重要）
+## 请求分层与端口职责
 
-本项目最常见的踩坑点：把 autorouter 入口端口和下游 chrome 端口当作同一个。
+同一个 `SERVER_PORT` 对外承担两种角色：
 
 ```
-client ──► SERVER_PORT (autorouter 入口) ──► 下游 chrome 调试端口
-          ↑                                ↑
-          .env: SERVER_PORT                .env: DEFAULT_INSTANCE_BROWSER_URL
-          客户端面向的端口                  autorouter 内部 fetch 的端口
-          （默认 9223）                     （managed 模式自动分配；
-                                              attached 模式必填，例如 9222）
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                        SERVER_PORT (示例 9223，代码默认 3100)                    │
+│                                                                                 │
+│  ┌─── 兼容模式 (default) ──────────────────────────────────────────────────┐    │
+│  │                                                                         │    │
+│  │  HTTP 发现接口                    WS/CDP 代理                           │    │
+│  │  ├─ GET /json/version             ├─ /devtools/browser/<token>          │    │
+│  │  ├─ GET /json/list                └─ /devtools/page/<id>               │    │
+│  │  ├─ GET /json                                                          │    │
+│  │  └─ GET /json/protocol            行为：                               │    │
+│  │                                    · 首次请求触发懒加载默认实例          │    │
+│  │  行为：                            · 双向透传 CDP 消息                  │    │
+│  │  · 代理下游 Chrome 响应            · wsDebuggerUrl 改写为入口层地址     │    │
+│  │  · webSocketDebuggerUrl 改写                                           │    │
+│  │                                                                         │    │
+│  └─────────────────────────────────────────────────────────────────────────┘    │
+│                                         │                                       │
+│                                         ▼                                       │
+│                              ┌─────────────────────┐                            │
+│                              │  RuntimeRegistry    │                            │
+│                              │  (内存实例注册表)    │                            │
+│                              └─────────────────────┘                            │
+│                                         ▲                                       │
+│  ┌─── 管理模式 (autorouter) ───────────────────────────────────────────────┐    │
+│  │                                                                         │    │
+│  │  Admin API                                                              │    │
+│  │  ├─ GET    /api/instances              列出所有实例                      │    │
+│  │  ├─ POST   /api/instances              创建实例                         │    │
+│  │  ├─ GET    /api/instances/:id          查询单实例                       │    │
+│  │  ├─ PATCH  /api/instances/:id          更新配置                         │    │
+│  │  ├─ DELETE /api/instances/:id          删除实例                         │    │
+│  │  ├─ POST   /api/instances/:id/start    启动                            │    │
+│  │  ├─ POST   /api/instances/:id/stop     停止                            │    │
+│  │  ├─ POST   /api/instances/:id/refresh  刷新 metadata                   │    │
+│  │  └─ GET    /api/instances/:id/health   健康检查                         │    │
+│  │                                                                         │    │
+│  └─────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                 │
+└────────────────────────────────────────────┬────────────────────────────────────┘
+                                             │
+                          ┌──────────────────┼──────────────────┐
+                          ▼                                     ▼
+              ┌───────────────────────┐             ┌───────────────────────┐
+              │  managed 实例          │             │  attached 实例         │
+              │  · autorouter 拉起    │             │  · 外部已运行 Chrome   │
+              │  · 端口自动分配        │             │  · browserUrl 手动指定 │
+              │  · 生命周期全托管      │             │  · 仅代理，不管进程    │
+              │  · 回收: stop/kill/    │             │                       │
+              │    cleanup            │             │                       │
+              └───────────────────────┘             └───────────────────────┘
+                          │                                     │
+                          ▼                                     ▼
+              ┌───────────────────────┐             ┌───────────────────────┐
+              │  Chrome (port: auto)  │             │  Chrome (port: 9222)  │
+              │  --remote-debugging-  │             │  --remote-debugging-  │
+              │    port=<动态>        │             │    port=9222          │
+              └───────────────────────┘             └───────────────────────┘
 ```
 
-固定规则：
+### 端口隔离
 
-- `SERVER_PORT` 永远表示 autorouter **对外入口**；
-- `DEFAULT_INSTANCE_BROWSER_URL` 永远指向 **下游真实 chrome**；
-- 两者**必须不同**。如果配成相同地址，autorouter 会把请求转发给自己造成自指环，
-  表现为 `fetch failed` / `unhealthy`。
+| 模式 | 下游端口来源 | 自指环风险 |
+|------|-------------|:---------:|
+| managed | `findAvailablePort()` 自动分配 | 无 |
+| attached | 用户填写 `browserUrl` | 仅当误配为 `SERVER_PORT` 时触发 |
 
-下游不必感知 9223 是 autorouter——把它当成普通 CDP 端口使用即可，autorouter 会在首次根路径
-请求到来时按 `.env` 模板懒加载默认实例，对客户端透明。
+attached 模式下若 `browserUrl` 指向 autorouter 自身（如 `http://127.0.0.1:9223`），请求会自指循环，表现为 `fetch failed` / `unhealthy`。确保下游地址指向独立的 Chrome 进程即可。
 
 ## Quick Start
 
@@ -162,15 +212,15 @@ cdp-autorouter-cli skills get cdp-autorouter-cli   # 动态加载完整指令集
 
 ## .env 配置
 
-核心心智一句话：**复用入口，不复用端口。** 客户端只用 `SERVER_PORT`（默认 9223），autorouter 会把请求转发到下游真实 chrome；下游端口由 `DEFAULT_INSTANCE_*` 控制，**永远不能等于** `SERVER_PORT`。
+核心心智一句话：**复用入口，不复用端口。** 客户端只用 `SERVER_PORT`（代码默认 3100，示例中用 9223），autorouter 会把请求转发到下游真实 chrome；下游端口由 `DEFAULT_INSTANCE_*` 控制，**永远不能等于** `SERVER_PORT`。
 
 ```
 client ──► SERVER_PORT (autorouter 入口) ──► 下游 chrome 调试端口
           ▲                                ▲
           .env: SERVER_PORT                .env: DEFAULT_INSTANCE_BROWSER_URL
           客户端面向的端口                  autorouter 内部 fetch 的端口
-          （默认 9223）                     （managed 模式留空自动分配；
-                                              attached 模式必填，例如 9222）
+          （代码默认 3100，                （managed 模式留空自动分配；
+            示例中用 9223）                  attached 模式必填，例如 9222）
 ```
 
 ### 三种玩法（按推荐度）
