@@ -395,6 +395,15 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
       // Admin API:返回 autorouter 的实例注册表,而非 Chrome 标签页。
       if (method === 'GET' && path === '/api/instances') {
+        // Always probe non-terminal instances before returning,
+        // so callers get up-to-date status.
+        const instances = registry.list();
+        await Promise.all(
+          instances
+            .filter(i => i.status === 'healthy' || i.status === 'unhealthy' || i.status === 'starting')
+            .filter(i => i.browserUrl)
+            .map(i => supervisor.refresh(i.instanceId).catch(() => { /* already logged in refresh */ })),
+        );
         json(
           response,
           200,
@@ -803,7 +812,46 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   };
 }
 
+/**
+ * Kill the process occupying a given TCP port (best-effort, cross-platform).
+ */
+async function killPortOccupant(port: number): Promise<void> {
+  const {execSync} = await import('node:child_process');
+  const red = process.stdout.hasColors?.() || process.env.FORCE_COLOR ? '\x1b[31m' : '';
+  const reset = red ? '\x1b[0m' : '';
+  try {
+    if (process.platform === 'win32') {
+      const out = execSync(`netstat -ano | findstr :${port}`, {encoding: 'utf8'});
+      const pids = new Set<number>();
+      for (const line of out.split('\n')) {
+        if (/LISTENING/i.test(line)) {
+          const parts = line.trim().split(/\s+/);
+          const pid = parseInt(parts[parts.length - 1] ?? '', 10);
+          if (pid > 0) pids.add(pid);
+        }
+      }
+      for (const pid of pids) {
+        execSync(`taskkill /F /PID ${pid}`, {encoding: 'utf8'});
+        process.stderr.write(`${red}[force] killed PID ${pid} on port ${port}${reset}\n`);
+      }
+    } else {
+      const out = execSync(`lsof -ti tcp:${port}`, {encoding: 'utf8'}).trim();
+      if (out) {
+        execSync(`kill -9 ${out}`, {encoding: 'utf8'});
+        process.stderr.write(`${red}[force] killed PID ${out} on port ${port}${reset}\n`);
+      }
+    }
+  } catch {
+    // No process on port or kill failed — safe to proceed.
+  }
+}
+
 if (isMainModule()) {
+  const forceFlag = process.argv.includes('--force');
+  const policy = loadEnvPolicy();
+  if (forceFlag) {
+    await killPortOccupant(policy.serverPort);
+  }
   const server = await createAutorouterServer();
   // 使用结构化日志打印启动横幅,使其在 JSON 模式下仍可被查询。
   server.logger.info(`autorouter listening at ${server.origin}`, {

@@ -282,7 +282,7 @@ Usage: cdp-autorouter-cli [--port <port>] [--json] <command> [args]
 Commands:
   connect [port]       Save port to .autorouter file (default: 3100)
   disconnect           Remove .autorouter file
-  list                 List all instances
+  list                 List all instances (with live health check)
   create               Create instance (--id <id> --mode <mode> [--browser-url <url>])
   start <id>           Start instance
   stop <id>            Stop instance
