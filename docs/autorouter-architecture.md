@@ -241,6 +241,29 @@ DEFAULT_INSTANCE_REMOTE_DEBUGGING_PORT=9222
 - 根路径若命中默认实例，则行为尽量贴近单个 `chrome-devtools-mcp -> Chrome` 直连模式
 - 所有 WS 请求都必须经过 `WS CDP Proxy`
 
+## 8.1 WS 代理实现注意事项
+
+`ws` 库（v8+）的 `message` 事件返回 `Buffer`，而 `send(Buffer)` 默认发送
+**binary frame**（opcode 2）。Chrome DevTools Protocol 只接受 **text frame**
+（opcode 1），收到 binary frame 后会直接 RST 连接（close code 1006，无 close
+frame），客户端表现为 "CDP response channel closed"。
+
+代理转发时必须保留原始 frame 类型：
+
+```typescript
+// ✗ 错误：Buffer 默认走 binary frame，Chrome 会断开
+clientSocket.on('message', data => {
+  downstreamSocket.send(data);
+});
+
+// ✓ 正确：通过 isBinary 保留 text/binary 语义
+clientSocket.on('message', (data, isBinary) => {
+  downstreamSocket.send(data, {binary: isBinary});
+});
+```
+
+同理，`pendingMessages` 缓冲也需要记录 `binary` 标记，flush 时一并传递。
+
 ## 9. 生命周期与回收
 
 ### 9.1 实例启动
