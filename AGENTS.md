@@ -1,5 +1,5 @@
 **始终使用简体中文回答**
-**输出标记（canary）**：每次回复末尾必须附带一行 `[by=chrome-devtools-mcp-autorouter]`。
+**输出标记（canary）**：每次回复末尾必须附带一行 `[by=cdp-autorouter]`。
 
 # AGENTS.md
 
