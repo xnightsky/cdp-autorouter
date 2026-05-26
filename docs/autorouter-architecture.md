@@ -123,6 +123,21 @@ sequenceDiagram
 
 ## 6. 配置模型
 
+### 6.0 两端口模型
+
+配置中最容易踩的坑是把 autorouter 入口端口和下游 chrome 端口混淆。固定语义如下：
+
+```
+client ──► SERVER_PORT (autorouter 入口) ──► 下游 chrome 调试端口
+```
+
+- `SERVER_PORT`：autorouter **对外**端口，client 唯一感知的端口（默认 9223）。
+- `DEFAULT_INSTANCE_BROWSER_URL` / `DEFAULT_INSTANCE_REMOTE_DEBUGGING_PORT`：autorouter **内部** fetch 的真实 chrome 端点（managed 模式留空自动分配；attached 模式必填且 ≠ SERVER_PORT）。
+
+两者必须不同。若 `browserUrl` 指向 autorouter 自身（即 `http://${SERVER_HOST}:${SERVER_PORT}`），autorouter 会把请求转发给自己造成自指环，外部表现为持续 `fetch failed` / `unhealthy`。配置加载阶段建议加防呆校验。
+
+下游客户端不必感知 9223 是 autorouter——把它当成普通 CDP 端口即可，autorouter 在首次根路径请求到来时按 `.env` 模板懒加载默认实例，对客户端透明。
+
 ### 6.1 `.env` 负责什么
 
 `.env` 第一版只负责策略和默认实例引导模板，不负责保存全部实例。

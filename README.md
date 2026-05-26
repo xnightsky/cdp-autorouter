@@ -23,6 +23,29 @@ chrome-devtools-mcp -> autorouter (HTTP + WS) -> real Chrome instance
 - npm
 - Chrome / Chromium（`managed` 模式需要可执行文件，`attached` 模式需要已有远程调试端点）
 
+## 两端口模型（重要）
+
+本项目最常见的踩坑点：把 autorouter 入口端口和下游 chrome 端口当作同一个。
+
+```
+client ──► SERVER_PORT (autorouter 入口) ──► 下游 chrome 调试端口
+          ↑                                ↑
+          .env: SERVER_PORT                .env: DEFAULT_INSTANCE_BROWSER_URL
+          客户端面向的端口                  autorouter 内部 fetch 的端口
+          （默认 9223）                     （managed 模式自动分配；
+                                              attached 模式必填，例如 9222）
+```
+
+固定规则：
+
+- `SERVER_PORT` 永远表示 autorouter **对外入口**；
+- `DEFAULT_INSTANCE_BROWSER_URL` 永远指向 **下游真实 chrome**；
+- 两者**必须不同**。如果配成相同地址，autorouter 会把请求转发给自己造成自指环，
+  表现为 `fetch failed` / `unhealthy`。
+
+下游不必感知 9223 是 autorouter——把它当成普通 CDP 端口使用即可，autorouter 会在首次根路径
+请求到来时按 `.env` 模板懒加载默认实例，对客户端透明。
+
 ## Quick Start
 
 所有玩法的共同前置（在项目根目录执行）：
@@ -126,13 +149,119 @@ cdp-autorouter-cli skills get cdp-autorouter-cli   # 动态加载完整指令集
 - **Admin API** 专注内存级实例注册、状态与生命周期操作，不写盘；
 - **受管实例回收** 统一登记管理的浏览器进程，支持 stop / reclaim / 进程退出自动清理。
 
-## .env 策略
+## 故障排查
 
-.env 只提供兼容路径需要的策略与默认实例引导模板，不承担运行时实例数据：
+| 现象 | 根因 | 处理 |
+|---|---|---|
+| `Managed instance 'default' requires executablePath` | managed 模式没填 chrome 路径 | `.env` 设 `DEFAULT_INSTANCE_EXECUTABLE_PATH` 或环境变量 `CHROME_EXECUTABLE_PATH` |
+| `Attached instance '...' requires browserUrl or wsEndpoint` | attached 模式没指定下游 chrome 地址 | 创建实例时加 `--browser-url`，或 `.env` 配 `DEFAULT_INSTANCE_BROWSER_URL` |
+| `unhealthy` + `fetch failed`（持续） | `browserUrl` 指向 autorouter 自身（自指环），或下游 chrome 没起来 | 检查 `browserUrl` 不等于 `http://${SERVER_HOST}:${SERVER_PORT}`；attached 模式确认下游 chrome `--remote-debugging-port` 已启用 |
+| 启动期 4-5 条 `instance refresh failed` warn 后变 healthy | managed 启动 chrome 时 250ms 轮询，前几次端口未就绪——正常现象 | 不需处理 |
+| `cdp-autorouter-cli switch X` 报 `status is 'unhealthy', must be 'healthy'` | 该实例的 `lastError` 决定：先 `cdp-autorouter-cli --json status X` 看 `lastError` | 按 `lastError` 定位；自指环看上一行 |
+| `agent-browser connect 9223` 提示 `CDP response channel closed` | WS 链路或 token 失效——HTTP 通不代表 WS 通 | 看 server 日志最新 `ws upgrade` / `ws connection`；用 `wscat` 直连验证；token 一次性消费需重新拿 |
 
-- `COMPAT_MODE_ENABLED`、`COMPAT_LAZY_LOAD_ENABLED` 控制根路径兼容链路是否打开与是否延迟加载；
-- `DEFAULT_INSTANCE_*` 系列字段（如 `DEFAULT_INSTANCE_ID`、`DEFAULT_INSTANCE_MODE`、`DEFAULT_INSTANCE_BROWSER_URL`、`DEFAULT_INSTANCE_WS_ENDPOINT`、`DEFAULT_INSTANCE_USER_DATA_DIR`、`DEFAULT_INSTANCE_CHROME_ARGS` 等）仅描述默认兼容实例的引导配置；
-- 同时提供浏览器地址与 WS 端点时以 WS 优先；字段缺失则抛配置错误，避免向 chrome-devtools-mcp 返还半成品响应。
+## .env 配置
+
+核心心智一句话：**复用入口，不复用端口。** 客户端只用 `SERVER_PORT`（默认 9223），autorouter 会把请求转发到下游真实 chrome；下游端口由 `DEFAULT_INSTANCE_*` 控制，**永远不能等于** `SERVER_PORT`。
+
+```
+client ──► SERVER_PORT (autorouter 入口) ──► 下游 chrome 调试端口
+          ▲                                ▲
+          .env: SERVER_PORT                .env: DEFAULT_INSTANCE_BROWSER_URL
+          客户端面向的端口                  autorouter 内部 fetch 的端口
+          （默认 9223）                     （managed 模式留空自动分配；
+                                              attached 模式必填，例如 9222）
+```
+
+### 三种玩法（按推荐度）
+
+#### 玩法 1：零配置 managed —— 客户端 0 感知，autorouter 自挑下游端口（推荐）
+
+最贴近“客户端只关心 9223”心智。autorouter 自己拉起 chrome、自己挑空闲端口、自己清理 profile。
+
+```ini
+SERVER_HOST=127.0.0.1
+SERVER_PORT=9223                                                              # 客户端唯一入口
+
+COMPAT_MODE_ENABLED=true
+COMPAT_LAZY_LOAD_ENABLED=true
+
+DEFAULT_INSTANCE_ID=default
+DEFAULT_INSTANCE_MODE=managed
+DEFAULT_INSTANCE_EXECUTABLE_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
+DEFAULT_INSTANCE_HEADLESS=false
+
+# 下面三个全部留空：
+DEFAULT_INSTANCE_BROWSER_URL=
+DEFAULT_INSTANCE_REMOTE_DEBUGGING_PORT=
+DEFAULT_INSTANCE_USER_DATA_DIR=
+```
+
+实际行为：
+
+- 客户端 `curl http://127.0.0.1:9223/json/version` 触发懒加载
+- autorouter 调 `findAvailablePort()` 自挑空闲端口（例如 53847）拉起 chrome
+- 真实 chrome 的 `webSocketDebuggerUrl` 被改写成 `ws://127.0.0.1:9223/devtools/browser/<token>`
+- **客户端永远只看到 9223**
+
+#### 玩法 2：固定下游端口的 managed —— 便于排查或并发占位
+
+```ini
+SERVER_PORT=9223                                                              # 入口
+DEFAULT_INSTANCE_MODE=managed
+DEFAULT_INSTANCE_EXECUTABLE_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
+DEFAULT_INSTANCE_REMOTE_DEBUGGING_PORT=19222                                  # ← 固定下游端口
+DEFAULT_INSTANCE_USER_DATA_DIR=
+```
+
+⚠️ `19222 ≠ 9223`，永远不能写成 9223。
+
+#### 玩法 3：attached —— 接管已运行的 chrome
+
+```ini
+SERVER_PORT=9223                                                              # 入口
+DEFAULT_INSTANCE_MODE=attached
+DEFAULT_INSTANCE_BROWSER_URL=http://127.0.0.1:9222                            # 你自己起的 chrome 调试端点
+```
+
+前提：先手动启动 chrome，例如：
+
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+  --remote-debugging-port=9222 `
+  --user-data-dir=C:\temp\chrome-debug-9222 `
+  --no-first-run --no-default-browser-check
+```
+
+### ❌ 错误示范
+
+```ini
+# 千万别这么写：
+SERVER_PORT=9223
+DEFAULT_INSTANCE_MODE=attached
+DEFAULT_INSTANCE_BROWSER_URL=http://127.0.0.1:9223                            # ← 自指环
+```
+
+autorouter 会把请求转发给自己，外部表现为持续 `fetch failed` / `unhealthy`。原因：autorouter 入口和下游 chrome 必须是两个不同的进程/端口，复用入口 ≠ 复用端口。
+
+### 字段速查
+
+| 字段 | 作用 | managed | attached |
+|---|---|:---:|:---:|
+| `SERVER_PORT` | autorouter 对外入口 | 必填 | 必填 |
+| `DEFAULT_INSTANCE_ID` | 默认实例 ID | 必填 | 必填 |
+| `DEFAULT_INSTANCE_MODE` | `managed` 或 `attached` | 必填 | 必填 |
+| `DEFAULT_INSTANCE_EXECUTABLE_PATH` | chrome 可执行文件路径，留空读 `CHROME_EXECUTABLE_PATH` | 必填 | 不用 |
+| `DEFAULT_INSTANCE_REMOTE_DEBUGGING_PORT` | 固定下游端口，留空自动分配 | 可选 | 不用 |
+| `DEFAULT_INSTANCE_BROWSER_URL` | 下游 chrome HTTP 端点 | 留空 | 必填 |
+| `DEFAULT_INSTANCE_WS_ENDPOINT` | 直连 WS 端点（优先级高于 browserUrl） | 不用 | 可选 |
+| `DEFAULT_INSTANCE_USER_DATA_DIR` | profile 目录，留空自动建临时目录 | 可选 | 不用 |
+| `DEFAULT_INSTANCE_HEADLESS` | 无头启动 | 可选 | 不用 |
+| `DEFAULT_INSTANCE_CHROME_ARGS` | 额外 chrome 启动参数 | 可选 | 不用 |
+| `COMPAT_MODE_ENABLED` | 根路径兼容路由开关 | 默认 true | 默认 true |
+| `COMPAT_LAZY_LOAD_ENABLED` | 首次根路径请求触发懒加载 | 默认 true | 默认 true |
+
+同时提供 `BROWSER_URL` 与 `WS_ENDPOINT` 时以 `WS_ENDPOINT` 优先；字段缺失则抛配置错误，避免向客户端返还半成品响应。
 
 ## 默认实例与懒加载
 
