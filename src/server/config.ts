@@ -1,6 +1,74 @@
+import {existsSync, realpathSync} from 'node:fs';
+import {dirname, isAbsolute, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
+
 import {config as loadEnvFile} from 'dotenv';
 
 import type {EnvPolicy, InstanceMode, LogLevel} from './types.js';
+
+/**
+ * Walk up from a starting directory until a `package.json` is found.
+ *
+ * Used to anchor `.env` lookups to the installed package root, so that
+ * `cdp-autorouter-server` invoked from any CWD still finds the bundled
+ * `.env`. Returns `undefined` if no `package.json` is found before the
+ * filesystem root.
+ */
+function findPackageRoot(startDir: string): string | undefined {
+  let current = startDir;
+  // Bound the walk to avoid infinite loops on broken filesystems.
+  for (let i = 0; i < 16; i++) {
+    if (existsSync(resolve(current, 'package.json'))) {
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve which `.env` file to load, in priority order:
+ *   1. `AUTOROUTER_ENV_FILE` explicit override (absolute or CWD-relative)
+ *   2. `<cwd>/.env` (preserves "run from project dir" semantics)
+ *   3. Package-root `.env` (so global install works from any CWD)
+ *
+ * Returns `undefined` when nothing is found, in which case `dotenv` is not
+ * invoked at all (no env var pollution).
+ */
+export function resolveEnvFile(
+  cwd: string = process.cwd(),
+  metaUrl: string = import.meta.url,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const explicit = env.AUTOROUTER_ENV_FILE?.trim();
+  if (explicit) {
+    const explicitPath = isAbsolute(explicit) ? explicit : resolve(cwd, explicit);
+    return existsSync(explicitPath) ? explicitPath : undefined;
+  }
+
+  const cwdEnv = resolve(cwd, '.env');
+  if (existsSync(cwdEnv)) {
+    return cwdEnv;
+  }
+
+  // realpath both ends to neutralize Windows junctions used by `npm install -g`.
+  let configFile: string;
+  try {
+    configFile = realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return undefined;
+  }
+  const packageRoot = findPackageRoot(dirname(configFile));
+  if (!packageRoot) {
+    return undefined;
+  }
+  const packageEnv = resolve(packageRoot, '.env');
+  return existsSync(packageEnv) ? packageEnv : undefined;
+}
 
 /**
  * 解析类布尔的环境变量，对缺失或空值给出确定性默认值。
@@ -51,7 +119,10 @@ function parseArgs(value: string | undefined): string[] {
 export function loadEnvPolicy(
   overrides: NodeJS.ProcessEnv = {},
 ): EnvPolicy {
-  loadEnvFile();
+  const envFile = resolveEnvFile();
+  if (envFile) {
+    loadEnvFile({path: envFile});
+  }
   const env = {
     ...process.env,
     ...overrides,
