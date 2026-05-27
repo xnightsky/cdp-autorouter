@@ -79,14 +79,24 @@
 
 | 模块 | 职责 |
 |------|------|
-| `src/config.ts` | `.env` 解析、策略与模板 |
-| `src/runtime-registry.ts` | 内存实例注册表 |
-| `src/default-instance-resolver.ts` | 根路径默认实例解析与懒注入 |
-| `src/child-browser-supervisor.ts` | managed/attached 启动、刷新、停止、回收 |
-| `src/route-bindings.ts` | 外部 WS token → 下游真实 WS 映射 |
-| `src/index.ts` | HTTP server、compat routes、Admin API、WS upgrade |
+| `src/server/config.ts` | `.env` 解析、策略与模板 |
+| `src/server/runtime-registry.ts` | 内存实例注册表 |
+| `src/server/default-instance-resolver.ts` | 根路径默认实例解析与懒注入 |
+| `src/server/child-browser-supervisor.ts` | managed/attached 启动、刷新、停止、回收 |
+| `src/server/route-bindings.ts` | 外部 WS token → 下游真实 WS 映射 |
+| `src/server/routing/pattern.ts` | 路径模板编译与匹配（`:name` / `:name?` / `*`） |
+| `src/server/routing/route.ts` | Route/RouteContext/HttpError 类型定义 |
+| `src/server/routing/dispatch-http.ts` | HTTP 请求分派（顺序匹配 + 错误兜底） |
+| `src/server/routing/dispatch-ws.ts` | WS upgrade 分派 |
+| `src/server/routes/capabilities.ts` | GET /api/capabilities |
+| `src/server/routes/admin-instances.ts` | /api/instances CRUD + 生命周期 action |
+| `src/server/routes/json-compat.ts` | /json/* 兼容层 + 默认路径 self-heal |
+| `src/server/routes/devtools-proxy.ts` | /devtools/* 透明 HTTP 反代 |
+| `src/server/routes/ws-upgrade.ts` | WS CDP 双向 proxy（token 校验 + message pump） |
+| `src/server/routes/rewriters.ts` | webSocketDebuggerUrl / devtoolsFrontendUrl 改写 |
+| `src/server/index.ts` | Composition root：装配 ctx、注册 routes、listen、shutdown |
 
-新增功能优先扩展现有边界，不继续堆进 `src/index.ts`。
+新增功能优先在 `routes/` 或 `routing/` 下扩展，`index.ts` 只做装配。
 
 ### 5. 编码约束
 
@@ -131,6 +141,5 @@ npm run build
 - `wsEndpoint-only` 健康检查/metadata 刷新未补齐
 - 未接 `uncaughtException`/`unhandledRejection` 回收钩子
 - 无真实 chrome-devtools-mcp 集成脚本
-- `src/index.ts` 过大待拆分
 
 补能力时先保持已有测试通过，再新增覆盖。
