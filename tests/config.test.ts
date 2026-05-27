@@ -173,3 +173,33 @@ describe('logger env policy', () => {
     }
   });
 });
+
+describe('restart timeout policy', () => {
+  // P2-6: 默认路径嗅探自愈的单次重拉超时需可配置，默认 8000ms。
+  test('parses DEFAULT_INSTANCE_RESTART_TIMEOUT_MS', async () => {
+    const server = await createAutorouterServer({
+      env: {
+        SERVER_PORT: '0',
+        DEFAULT_INSTANCE_RESTART_TIMEOUT_MS: '4500',
+      },
+      logger: createSilentLogger(),
+    });
+    try {
+      expect(server.policy.restartTimeoutMs).toBe(4500);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('defaults restartTimeoutMs to 8000 when env absent', async () => {
+    const server = await createAutorouterServer({
+      env: {SERVER_PORT: '0'},
+      logger: createSilentLogger(),
+    });
+    try {
+      expect(server.policy.restartTimeoutMs).toBe(8000);
+    } finally {
+      await server.close();
+    }
+  });
+});

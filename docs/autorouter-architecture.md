@@ -83,7 +83,16 @@ flowchart TD
 - 真实 Chrome 的 WebSocket 地址只允许在 `autorouter` 内部使用
 - 没有 WS 转发能力，这个项目的实例路由、懒加载、托管回收都会失效
 
-## 5. 默认实例懒加载时序图
+## 5. 默认实例懒加载与路由层自愈时序图
+
+默认路径上的自愈走**双触发器**：
+
+- **触发器 A（主动，在 `resolveInstance` 中）**：请求到达时实例 status 已不是 healthy（例如 managed 子进程上一次退出后留下 `error/stopped/unhealthy`）。`error` `starting` `unhealthy` `stopped` `created` 全部交给 `supervisor.start()`，其内部 inflight Promise 去重保证并发请求只 spawn 一次。
+- **触发器 B（被动兜底，在 compat handler 的 catch 中）**：`resolveInstance` 返回 healthy 但下游 fetch 仍失败（典型场景：attached 上游被外部关闭，autorouter 没有进程权限发现）。managed 走 retry-after-self-heal，attached 返 503 诊断。
+
+两个触发器都仅作用于**默认实例 + 根路径**（`instanceId === undefined`）；显式路径不享受。
+
+### 5.1 首次懒加载（默认实例不存在）
 
 ```mermaid
 sequenceDiagram
@@ -101,25 +110,84 @@ sequenceDiagram
         R->>R: read .env template
         R->>G: create env-bootstrap instance in memory
     end
-    alt instance not healthy
-        R->>S: start/connect managed instance
-        S->>C: launch/connect Chrome
-        C-->>S: browserUrl/wsEndpoint available
+    alt status ∈ (created, stopped) and mode=managed
+        R->>S: start managed instance
+        S->>C: launch Chrome
+        C-->>S: browserUrl ready
         S->>G: mark healthy + update metadata
     end
     R-->>H: resolved instance
-    H->>C: request real /json/version
+    H->>C: fetch downstream /json/version
     C-->>H: real version payload
     H->>H: rewrite webSocketDebuggerUrl
-    H-->>M: autorouter /json/version response
+    H-->>M: 200 + autorouter metadata
 ```
 
-这个时序对应的行为固定为：
+### 5.2 路由层自愈（仅根路径 + 默认实例）
+
+描述两个触发器的中间状态与退出路径。主动触发（A）走上半分支，被动兜底（B）走下半分支。
+
+```mermaid
+sequenceDiagram
+    participant M as chrome-devtools-mcp
+    participant H as HTTP Compat Proxy
+    participant R as resolveInstance
+    participant S as Browser Supervisor
+    participant C as Real Chrome
+
+    M->>H: GET /json/version (default route)
+    H->>R: resolve default instance
+    alt 触发器 A：status 不是 healthy（managed default）
+        Note over R,S: 包括 error/starting/unhealthy/stopped/created
+        R->>S: supervisor.start(instance)
+        Note over S: 幂等清理：L2 杀残留句柄 + 清死运行时痕迹<br/>inflight Promise 去重并发请求
+        S->>C: spawn new Chrome
+        C-->>S: browserUrl ready
+        S-->>R: healthy
+    else 触发器 A：attached default 不是 healthy
+        R-->>H: 仅 refresh，不启动外部 chrome
+    end
+    R-->>H: 实例已解析
+    H->>C: fetch downstream /json/version
+    alt fetch 成功
+        C-->>H: real version payload
+        H-->>M: 200 + autorouter metadata
+    else fetch 失败（触发器 B 被动兜底）
+        Note over H: 典型场景：attached 上游被外部关后<br/>resolveInstance 以为还 healthy
+        alt mode = attached
+            H-->>M: 503 "attached upstream unreachable: …"
+        else mode = managed
+            H->>S: supervisor.start(instance)
+            S->>C: spawn new Chrome
+            C-->>S: browserUrl ready
+            H->>C: retry fetch
+            C-->>H: real version payload
+            H-->>M: 200 + autorouter metadata
+        end
+    end
+```
+
+### 5.3 路径范围语义
+
+- 本节所有自愈语义仅适用于**默认实例与根路径兼容路由**
+- 显式路径 `/instances/{id}/json/*` 不享受探死与自愈，表现与 v1 原设计一致（开发者手动 `POST /api/instances/{id}/restart`）
+- 不偏业务路由，不偏 admin API；边界在代码上以 `instanceId === undefined` 判别
+
+```
+
+这两张时序对应的行为固定为：
 
 - 服务启动时不预热默认实例
 - 第一次命中根路径兼容接口时才触发默认实例解析
 - 若默认实例不存在，则按 `.env` 模板注入内存
-- 若默认实例未启动，则立即懒启动
+- 首次 `created` 状态走 §5.1 懒启动路径
+- 运行期上游 chrome 不可达时走 §5.2：不同模式与检测点包括两个触发器
+  - 触发器 A（主动）：managed default 崩溃后 exit handler 将 status 打为 `error` → 下次请求 resolveInstance 检测到不是 healthy → 交 supervisor.start 重拉
+  - 触发器 B（被动兜底）：attached default 上游被外部关闭后 status 仍为 healthy——autorouter 没有进程权限发现——需 fetch 失败后才发现，在 catch 里返 503 诊断
+  - managed 实例双触发器都能自愈；attached 实例只有触发器 B 返回 503，从不擅自启动外部 chrome
+- 同一实例并发自愈通过 inflight Promise 去重，不会因突发流量 spawn 多个进程
+- 启动超时由 `DEFAULT_INSTANCE_RESTART_TIMEOUT_MS` 控制，超时返回 503
+- 显式实例路径 `/instances/{id}/json/*` 不享受任一触发器，开发者需手动 `POST /api/instances/{id}/restart`
 
 ## 6. 配置模型
 
@@ -184,6 +252,9 @@ DEFAULT_INSTANCE_REMOTE_DEBUGGING_PORT=
 - `source`: `env-bootstrap` | `api-runtime`
 - `mode`: `managed` | `attached`
 - `status`: `created` | `starting` | `healthy` | `unhealthy` | `stopping` | `reclaiming` | `stopped` | `error`
+  - 默认实例上 `error` 不是终态：意外退出会被记录为 `error` + `lastError` 以保留诊断信息，但下一次根路径请求（仅默认实例 + 根路径路由）会触发路由层自愈重启（参见 §9.2 触发器 A）
+  - 实际上默认路径上 managed 实例的任何非 healthy 状态（含 `error/starting/unhealthy/stopped/created`）都会被触发器 A 纳入自愈
+  - 显式实例路径上 `error` 仍为终态，需调 `POST /api/instances/{id}/restart` 手动恢复
 - `browserUrl`
 - `wsEndpoint`
 - `version`
@@ -284,7 +355,71 @@ clientSocket.on('message', (data, isBinary) => {
 - `attached`
   - autorouter 只接入已有浏览器，不创建外部进程
 
-### 9.2 统一回收
+### 9.2 默认实例路由层自愈（Self-heal on Default Route）
+
+**适用范围：仅限默认实例 + 根路径兼容路由**（`/json/version` `/json/list` `/json` `/json/protocol`）。显式实例路径 `/instances/{id}/json/*` 不享受自愈，失败返回 `500`——开发者已明确指定 id，应手动调用 `POST /api/instances/{id}/restart`。
+
+#### 双触发器架构
+
+| 触发器 | 检测点 | 触发条件 | 典型场景 |
+|---------|--------|---------|----------|
+| **A（主动）** | `resolveInstance` | managed default 的 status 不是 `healthy` | managed 子进程崩溃后 exit handler 将 status 打为 `error` |
+| **B（被动兜底）** | compat handler 的 catch | resolveInstance 返回 healthy 但 fetch 下游失败 | attached 上游被外部关闭，autorouter 无进程权限发现 |
+
+两个触发器互补：
+- managed 实例大多数情况走触发器 A（exit handler 已经标记 error），触发器 B 仅作为“重启后立即又死”的二次兑底
+- attached 实例只能被触发器 B 发现（无进程权限，无 exit handler），返回 503 不擅自启动
+
+#### 触发器 A：resolveInstance 主动自愈
+
+`resolveInstance` 在默认路径上检测到 managed default 的 status 不是 `healthy` 时，直接交给 `supervisor.start()`。包括以下所有状态：
+
+- `error`：上一次意外退出
+- `starting`：某个并发请求已在重拉中，本请求 await 同一 inflight Promise
+- `unhealthy`：并发路径中 refresh 失败的中间状态
+- `stopped`：被 admin API 停止后再次访问
+- `created`：首次懒加载
+
+这样做的好处：不管实例处于什么中间状态，默认路径的请求永远能拿到“端口可用”的结果（或超时 503），不会卡在中间状态上反复 refresh 失败。
+
+#### 触发器 B：compat handler catch 被动兜底
+
+```
+GET /json/* (默认实例路径):
+  resolveInstance 返回 healthy 的实例
+  try fetch(downstream)
+    ├─ 200 → 改写 webSocketDebuggerUrl 后返回
+    └─ catch (上游不可达):
+          ├─ mode === 'attached' → 503 "attached upstream unreachable: …"
+          └─ mode === 'managed':
+                ├─ supervisor.start(instance)   // 含 L2 进程残留兜底
+                ├─ retry fetch (仅一次)
+                └─ 200 / 或 503（重启超时）
+```
+
+#### L2 进程残留兜底（supervisor.start() 入口）
+
+- 检查还未退出的旧 child 句柄 → `terminateProcess()` 后重新 spawn，防止旧 exit handler 污染新实例状态
+- 清除过期运行时痕迹：managed 的 `browserUrl`/`managedProcess`/`managedProcessPid`/`extensionsSummary`/`pageCount`/`lastError`
+- attached 的 `browserUrl` 是用户配置，不清；attached 不走 start()，无影响
+- 只在注册表层面检查，不做 OS 级 PID 探活或全局 chrome.exe 扫描（后者属 D-3）
+
+#### 并发去重
+
+- supervisor 内部 `inflightStarts: Map<id, Promise<RuntimeInstance>>`，同实例 starting 期间返回同一 promise
+- try/finally 保证完成后清除，无内存泄漏
+
+#### 超时与响应码语义
+
+- 启动超时由 `DEFAULT_INSTANCE_RESTART_TIMEOUT_MS` 控制（默认 8000 ms），超时返回 `503`，不是 `500`
+- `error` 状态保留诊断信息（`lastError`）直到下次自愈成功，admin API 可查历史故障
+- `500` 仅代表 autorouter 自身 bug（非上游不可达）
+
+#### 与显式路径的边界
+
+显式实例路径仍走原有 `resolveInstance` 逻辑：非 healthy 走 refresh，refresh 失败 throw 500。不跳过这个边界、不隐式帮开发者描实例。
+
+### 9.3 统一回收
 
 必须支持回收所有受管子浏览器。
 
@@ -303,6 +438,11 @@ clientSocket.on('message', (data, isBinary) => {
 - `POST /api/instances/reclaim-managed`
 - 进程退出
 - 致命异常退出前的统一清理钩子
+
+意外退出（非 reclaiming）只会标记 `error`，不删除注册表记录。后续恢复路径按是否默认实例分两路：
+
+- 默认实例 + 根路径请求 → 下一次请求触发 §9.2 触发器 A 主动自愈（resolveInstance 检测到非 healthy 即交 supervisor.start）
+- 显式实例路径请求 → 保持 500，开发者需手动 `POST /api/instances/{id}/restart`。
 
 回收顺序：
 

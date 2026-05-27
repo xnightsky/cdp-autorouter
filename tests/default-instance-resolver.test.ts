@@ -14,6 +14,7 @@ describe('DefaultInstanceResolver logger integration', () => {
       trustProxy: false,
       serverHost: '127.0.0.1',
       serverPort: 3100,
+      restartTimeoutMs: 8000,
       logLevel: 'info' as const,
       logFormat: 'pretty' as const,
       defaultInstanceTemplate: {
@@ -37,6 +38,7 @@ describe('DefaultInstanceResolver logger integration', () => {
       trustProxy: false,
       serverHost: '127.0.0.1',
       serverPort: 3100,
+      restartTimeoutMs: 8000,
       logLevel: 'info' as const,
       logFormat: 'pretty' as const,
       defaultInstanceTemplate: {
@@ -59,6 +61,7 @@ describe('DefaultInstanceResolver logger integration', () => {
       trustProxy: false,
       serverHost: '127.0.0.1',
       serverPort: 3100,
+      restartTimeoutMs: 8000,
       logLevel: 'info' as const,
       logFormat: 'pretty' as const,
       defaultInstanceTemplate: {

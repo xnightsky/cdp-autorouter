@@ -41,6 +41,7 @@
 | 28 | `POST /api/instances/{id}/restart` | ✅ 已实现(P2-4) | stop → start 组合重启,保留配置刷新进程 |
 | 29 | 实例连接元数据 | ✅ 已实现(P2-5) | 每个实例响应附带 `instanceVersionUrl` + `browserWebSocketDebuggerUrl`,基于请求 host 动态构建 |
 | 30 | MCP 启动参数自动升级 | ✅ 已实现(P3-1) | `resolveChromeDevToolsMcpLaunchArgs()` 导出函数;browserUrl→wsEndpoint 自动解析;超时控制 + graceful fallback |
+| 31 | 默认实例路由层自愈(Self-heal on Default Route) | ✅ 已实现(P2-6) | **仅默认实例 + 根路径路由**:双触发器架构——触发器 A(`resolveInstance` 检测 managed default 非 healthy 主动交 supervisor.start) + 触发器 B(fetch 失败 catch 兜底,attached 返 503,managed retry);supervisor.start() 入口 L2 进程残留兜底;inflight Promise 去重;`DEFAULT_INSTANCE_RESTART_TIMEOUT_MS`(默认 8000ms)控制超时;显式实例路径不享受自愈 |
 
 ## 2. 待实现清单
 
@@ -82,6 +83,7 @@
 | P2-3 | **POST /api/instances/{id}/switch** | 切换默认实例(仅限 running 实例) | ✅ **已实现**:仅 healthy 实例可切换;`currentDefaultInstanceId` 运行时可变;`isDefault` 标记联动 |
 | P2-4 | **POST /api/instances/{id}/restart** | 同 ID 重启实例(保留 port/userDataDir) | ✅ **已实现**:stop → start 组合流程,保留配置刷新进程 |
 | P2-5 | **实例连接元数据** | `instanceVersionUrl` + `browserWebSocketDebuggerUrl` 稳定对外暴露 | ✅ **已实现**:每次响应附带,URL 基于请求 host 动态构建,支持反代 |
+| P2-6 | **默认路径路由层自愈** | 无对照(对照 repo 仅靠手动 restart API) | ✅ **已实现**:**仅作用于默认实例 + 根路径路由**;双触发器架构——触发器 A(`resolveInstance` 主动检测 managed default 非 healthy) + 触发器 B(fetch 失败 catch 兜底);`supervisor.start()` 入口 L2 进程残留兜底(kill 旧句柄 + 清死运行时痕迹);inflight 去重;启动超时可配置 |
 
 ### P3 - MCP 集成(对标对照 repo 的 mcp-launch-options.js + CLI MCP wrapper)
 
@@ -199,6 +201,7 @@ cdp-autorouter-cli --port 9300 list
 | P5-3 | **健康检查端点** | `GET /health` 返回 autorouter 自身健康状态(不依赖 Chrome),供负载均衡/监控使用 |
 | P5-4 | **Prometheus metrics**(可选) | 暴露 `GET /metrics`:instance_count、ws_connections_active、request_duration_seconds、managed_process_count 等 |
 | P5-5 | **实例事件 hook** | 实例状态变更时 emit 事件(starting → healthy → stopped),支持外部监听;可用于通知系统或自动告警 |
+| ~~P5-6~~ | ~~**主动健康巡检(Watchdog)**~~ | **已取消**:与“稳定性”性价比不划算。周期调 `refresh()` 需处理巡检间隔/抖动/重启风暴，并与 P2-6 请求路径自愈产生竞态（同一实例双套 starting）；ROI 低于 P2-6。没有请求时实例是不是 healthy 不影响业务；一旦有请求，请求本身就是最准的探针。 |
 
 ### P6 - 开发体验(让贡献者更容易上手)
 
@@ -316,7 +319,7 @@ P6-5  CHANGELOG.md
 |---|------|------|
 | D-1 | `extensions` 占位返回 | 当前始终返回空数组,需要从下游 Chrome `/json/version` 提取真实扩展列表 |
 | D-2 | `wsEndpoint-only` 健康检查不完整 | 纯 WS 端点连接的实例缺少 HTTP /json/version 兜底,metadata 刷新依赖 WS 连通性 |
-| D-3 | `uncaughtException` / `unhandledRejection` 回收钩子 | 未注册全局异常处理,进程 crash 时 managed 浏览器可能泄露 |
+| D-3 | `uncaughtException` / `unhandledRejection` 回收钩子 | 未注册全局异常处理,进程 crash 时 managed 浏览器可能泄露。与 P2-6 路由层自愈独立:后者仅能在 autorouter 存活时重拉 chrome,autorouter 自身 crash 仍需 D-3 清理那些 chrome 孤儿进程 |
 | D-4 | 缺少真实 chrome-devtools-mcp 集成测试 | 没有自动化脚本验证完整主链 |
 | D-5 | `src/index.ts` 过大 | 当前单文件包含 HTTP server + WS upgrade + Admin API + compat routes + normalize 逻辑,应拆分 |
 

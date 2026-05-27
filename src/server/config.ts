@@ -166,6 +166,8 @@ export function loadEnvPolicy(
     trustProxy: parseBoolean(env.TRUST_PROXY, false),
     serverHost: env.SERVER_HOST?.trim() || '127.0.0.1',
     serverPort: parseNumber(env.SERVER_PORT, 3100),
+    // 仅默认实例嗅探自愈使用。默认 8000 ms 覆盖典型 chrome 冷启 1-3s + 留出富余。
+    restartTimeoutMs: parseNumber(env.DEFAULT_INSTANCE_RESTART_TIMEOUT_MS, 8000),
     logLevel,
     logFormat,
     logFile: env.LOG_FILE?.trim() || undefined,

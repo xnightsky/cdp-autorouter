@@ -433,4 +433,170 @@ describe('HTTP compat proxy', () => {
     const body = await response.text();
     expect(body).toContain('devtools-mock');
   });
+
+  // P2-6: attached default 上游 chrome 在请求之间被外部关闭 → 下次根路径请求应返回 503，
+  // 伴随明确的诊断信息。autorouter 不擅自启动外部 chrome。
+  test('attached default returns 503 when upstream is unreachable on default route', async () => {
+    chrome = await startMockChromeServer();
+
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'default',
+        DEFAULT_INSTANCE_MODE: 'attached',
+        DEFAULT_INSTANCE_BROWSER_URL: chrome.origin,
+      },
+      logger: createSilentLogger(),
+    });
+
+    // 首次请求走顺 → 200
+    const ok = await fetch(`${autorouter.origin}/json/version`);
+    expect(ok.status).toBe(200);
+
+    // 外部 chrome 被关
+    await chrome.close();
+    chrome = undefined;
+
+    // 下次请求应该 503，体现 attached 不自愈、有诊断语义
+    const dead = await fetch(`${autorouter.origin}/json/version`);
+    expect(dead.status).toBe(503);
+    const payload = (await dead.json()) as {error: string};
+    expect(payload.error).toMatch(/attached upstream unreachable/);
+  });
+
+  // P2-6: 显式实例路径 不享受探死与自愈：attached 外部不可达仍应返 500，
+  // 要求开发者允诸手动 restart。锁住路径范围语义不被意外扩展。
+  test('explicit instance route does not self-heal: attached unreachable returns 500', async () => {
+    chrome = await startMockChromeServer();
+
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+      },
+      logger: createSilentLogger(),
+    });
+
+    const create = await fetch(`${autorouter.origin}/api/instances`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({instanceId: 'alpha', mode: 'attached', browserUrl: chrome.origin}),
+    });
+    expect(create.status).toBe(201);
+
+    // 首次走顺
+    const ok = await fetch(`${autorouter.origin}/instances/alpha/json/version`);
+    expect(ok.status).toBe(200);
+
+    await chrome.close();
+    chrome = undefined;
+
+    const dead = await fetch(`${autorouter.origin}/instances/alpha/json/version`);
+    // 显式路径不自愈：fetch 错误不被包为 HttpError(503)，走兑底 catch 返回 500。
+    expect(dead.status).toBe(500);
+  });
+
+  // P2-6: managed default 子进程被外部 kill 后，下次根路径请求应自愈 → 200，
+  // 且 PID 实际发生了变化（证明真的 spawn 了新进程）。
+  test('managed default self-heals on root route after child process is killed', async () => {
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'default',
+        DEFAULT_INSTANCE_MODE: 'managed',
+        DEFAULT_INSTANCE_EXECUTABLE_PATH: process.execPath,
+        DEFAULT_INSTANCE_CHROME_ARGS: 'tests/fixtures/mock-managed-browser.cjs',
+      },
+      logger: createSilentLogger(),
+    });
+
+    // 首次请求 → 懒加载 + start → 200
+    const first = await fetch(`${autorouter.origin}/json/version`);
+    expect(first.status).toBe(200);
+
+    // 取出实际 PID，后面验证进程身份产生换代
+    const before = (await (await fetch(`${autorouter.origin}/api/instances`)).json()) as Array<{
+      instanceId: string;
+      managedProcessPid: number;
+    }>;
+    const oldPid = before.find(i => i.instanceId === 'default')!.managedProcessPid;
+    expect(typeof oldPid).toBe('number');
+
+    // 外部 kill。SIGKILL 避免 mock-managed 依赖优雅关闭逻辑被跳过。
+    process.kill(oldPid, 'SIGKILL');
+
+    // 给 exit handler 一个 tick，让它将 status 打为 error。
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // 下次根路径请求 → 懒探死 → supervisor.start 重拉 → retry → 200
+    const healed = await fetch(`${autorouter.origin}/json/version`);
+    expect(healed.status).toBe(200);
+
+    const after = (await (await fetch(`${autorouter.origin}/api/instances`)).json()) as Array<{
+      instanceId: string;
+      managedProcessPid: number;
+      status: string;
+    }>;
+    const entry = after.find(i => i.instanceId === 'default')!;
+    expect(entry.status).toBe('healthy');
+    expect(entry.managedProcessPid).not.toBe(oldPid);
+    expect(typeof entry.managedProcessPid).toBe('number');
+  }, 20_000);
+
+  // P2-6 (并发去重): managed default 被 kill 后并发多路请求，仅 spawn 一个新进程。
+  // 验证手段：所有响应以 200 返回，且实例最终 PID 唯一。如果 spawn 了多个，
+  // 最后一个存活的 PID 在 race 中随机，不可能稳定达到 healthy；与此同时多余的 spawn
+  // 会产生孤儿进程，被 inflight 去重防得住。
+  test('concurrent default-route requests deduplicate to a single spawn', async () => {
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'default',
+        DEFAULT_INSTANCE_MODE: 'managed',
+        DEFAULT_INSTANCE_EXECUTABLE_PATH: process.execPath,
+        DEFAULT_INSTANCE_CHROME_ARGS: 'tests/fixtures/mock-managed-browser.cjs',
+      },
+      logger: createSilentLogger(),
+    });
+
+    // 先 lazy bootstrap
+    expect((await fetch(`${autorouter.origin}/json/version`)).status).toBe(200);
+
+    const before = (await (await fetch(`${autorouter.origin}/api/instances`)).json()) as Array<{
+      instanceId: string;
+      managedProcessPid: number;
+    }>;
+    const oldPid = before.find(i => i.instanceId === 'default')!.managedProcessPid;
+    process.kill(oldPid, 'SIGKILL');
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // 同时发 5 个请求
+    const origin = autorouter.origin;
+    const responses = await Promise.all(
+      Array.from({length: 5}, () => fetch(`${origin}/json/version`)),
+    );
+    for (const r of responses) {
+      expect(r.status).toBe(200);
+    }
+
+    const after = (await (await fetch(`${autorouter.origin}/api/instances`)).json()) as Array<{
+      instanceId: string;
+      managedProcessPid: number;
+      status: string;
+    }>;
+    const entry = after.find(i => i.instanceId === 'default')!;
+    expect(entry.status).toBe('healthy');
+    expect(entry.managedProcessPid).not.toBe(oldPid);
+  }, 20_000);
 });

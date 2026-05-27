@@ -126,6 +126,13 @@ export interface EnvPolicy {
   trustProxy: boolean;
   serverHost: string;
   serverPort: number;
+  /**
+   * 默认实例嗅探自愈的单次重拉超时（毫秒）。
+   *
+   * 仅影响默认实例在根路径路由上的自愈路径；显式实例手动 restart 不受影响。
+   * 超时后 HTTP 返回 503，默认 8000 ms。
+   */
+  restartTimeoutMs: number;
   logLevel: LogLevel;
   logFormat: 'pretty' | 'json';
   logFile?: string;

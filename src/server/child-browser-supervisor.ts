@@ -48,16 +48,63 @@ export class ChildBrowserSupervisor {
   /** 按实例跟踪活跃 WS 代理 socket，stop() 时可统一关闭。 */
   readonly #managedConnections = new Map<string, Set<import('ws').WebSocket>>();
 
+  /**
+   * 同一实例同时多个 start() 调用去重：后续调用返回头个调用的 promise。
+   *
+   * 防止并发请求同时击中死默认实例时 spawn 多个 chrome。
+   * try/finally 保证完成后清除，无内存泄漏。
+   */
+  readonly #inflightStarts = new Map<string, Promise<RuntimeInstance>>();
+
   constructor(
     private readonly registry: RuntimeRegistry,
     private readonly logger?: Logger,
+    /**
+     * 默认实例嗅探自愈的单次重拉超时（毫秒）。也应用于首次启动轮询。
+     * 未传递时走保守默认 15s，保持向后兼容。
+     */
+    private readonly startTimeoutMs: number = 15_000,
   ) {}
 
   /**
    * 将实例带入健康、可达状态。
+   *
+   * 幂等语义：
+   * - 同实例并发调用返回同一 promise（详 #inflightStarts）。
+   * - 入口处清理过期运行时痕迹（L2 进程残留兜底），防止旧 child handle 的 exit 回调污染新实例状态。
    */
   async start(instance: RuntimeInstance): Promise<RuntimeInstance> {
+    const inflight = this.#inflightStarts.get(instance.instanceId);
+    if (inflight) {
+      this.logger?.debug('reusing inflight start', {instanceId: instance.instanceId});
+      return await inflight;
+    }
+
+    const task = this.startInternal(instance);
+    this.#inflightStarts.set(instance.instanceId, task);
+    try {
+      return await task;
+    } finally {
+      this.#inflightStarts.delete(instance.instanceId);
+    }
+  }
+
+  /**
+   * 实际启动路径，start() 负责去重。
+   */
+  private async startInternal(instance: RuntimeInstance): Promise<RuntimeInstance> {
     this.logger?.info('starting instance', {instanceId: instance.instanceId, mode: instance.mode});
+
+    // L2 进程残留兜底：旧 child 句柄还活着却不是 healthy——先 kill 再 spawn。
+    // 只看注册表记录的句柄，不做 OS 层 PID 探活（跨平台不可靠且越界到 D-3）。
+    if (instance.managedProcess && instance.managedProcess.exitCode === null) {
+      this.logger?.warn('killing stale managed process before restart', {
+        instanceId: instance.instanceId,
+        pid: instance.managedProcessPid,
+      });
+      await this.terminateProcess(instance.managedProcess);
+    }
+
     if (instance.mode === 'attached') {
       if (!instance.browserUrl && !instance.wsEndpoint) {
         throw new Error(`Attached instance '${instance.instanceId}' requires browserUrl or wsEndpoint.`);
@@ -65,6 +112,17 @@ export class ChildBrowserSupervisor {
       const next = this.registry.update(instance.instanceId, {status: 'starting'});
       return await this.refresh(next.instanceId);
     }
+
+    // managed: 清除所有过期运行时痕迹，让 spawn 路径从干净状态出发。
+    // attached 的 browserUrl 是用户配置，不在这里清；attached 路径也已在上面 return。
+    instance = this.registry.update(instance.instanceId, {
+      browserUrl: undefined,
+      managedProcess: undefined,
+      managedProcessPid: undefined,
+      extensionsSummary: [],
+      pageCount: undefined,
+      lastError: undefined,
+    });
 
     const executablePath =
       instance.executablePath || process.env.CHROME_EXECUTABLE_PATH || detectChromePath();
@@ -121,6 +179,16 @@ export class ChildBrowserSupervisor {
       // 区分 deliberate reclaim（预期退出）与 crash。
       const current = this.registry.get(instance.instanceId);
       if (!current) {
+        return;
+      }
+      // 如果当前记录已被后续 start 替换为新进程（PID 不同），则这是一个"遗贤"回调，
+      // 其退出不应覆写新实例状态。注意 current.managedProcessPid 在被 L2 清后为 undefined。
+      if (current.managedProcessPid !== child.pid) {
+        this.logger?.debug('stale child exit ignored', {
+          instanceId: instance.instanceId,
+          stalePid: child.pid,
+          currentPid: current.managedProcessPid,
+        });
         return;
       }
       const isReclaiming = current.status === 'reclaiming';
@@ -241,15 +309,16 @@ export class ChildBrowserSupervisor {
 
   /**
    * 轮询直到新启动的 managed 浏览器暴露 `/json/version`。
+   *
+   * 超时上限由 startTimeoutMs 控制（默认实例自愈路径走 EnvPolicy.restartTimeoutMs）。
    */
   private async waitUntilAvailable(
     instanceId: string,
     browserUrl: string,
   ): Promise<RuntimeInstance> {
     const startedAt = Date.now();
-    const timeoutMs = 15_000;
 
-    while (Date.now() - startedAt < timeoutMs) {
+    while (Date.now() - startedAt < this.startTimeoutMs) {
       const refreshed = await this.refresh(instanceId);
       if (refreshed.status === 'healthy') {
         return refreshed;

@@ -11,7 +11,16 @@
 
 1. 根路径只表示默认实例，从不聚合多个实例的 targets；  
 2. HTTP 层负责发现并 rewrite `webSocketDebuggerUrl`，WS 层负责中转 `/devtools/browser/*` 与 `/devtools/page/*`；  
-3. 不管是默认实例还是显式实例，所有 CDP 连接都在 `autorouter` 内部转发，真实 Chrome 的 WS 地址从不暴露给外部。
+3. 不管是默认实例还是显式实例，所有 CDP 连接都在 `autorouter` 内部转发，真实 Chrome 的 WS 地址从不暴露给外部；
+4. **默认路径双触发器自愈**：根路径 `/json/*` 采用双触发器架构保证“端口可用”语义——触发器 A（`resolveInstance` 检测到 managed default 非 healthy 时主动交 `supervisor.start`）+ 触发器 B（fetch 失败后兜底，attached 返 503，managed retry）；**显式实例路径 `/instances/{id}/json/*` 不享受任一触发器**，开发者手动调 `POST /api/instances/{id}/restart`；
+5. **attached 不自愈**：连默认实例上 attached 不可达也仅返回 503 诊断信息，autorouter 不擅自启动外部 chrome；
+6. **响应码分路径语义**：
+
+   | 路径 | 200 | 503 | 500 |
+   |------|----|----|----|----|
+   | 根路径 + managed default | 链路通畅（含触发器 A 自愈后） | 启动超时（`DEFAULT_INSTANCE_RESTART_TIMEOUT_MS`）或触发器 B retry 失败 | autorouter 自身 bug |
+   | 根路径 + attached default | 链路通畅 | 触发器 B 检测到上游不可达 | autorouter 自身 bug |
+   | 显式路径 `/instances/{id}/json/*` | 链路通畅 | 不使用 | 上游不可达 或 autorouter 自身 bug |
 
 ## Admin API
 

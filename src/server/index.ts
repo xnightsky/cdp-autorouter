@@ -34,6 +34,17 @@ interface ListTarget {
 }
 
 /**
+ * 携带 HTTP 状态码的内部错误，让 catch 块能区分 503（上游不可达 / 重启超时）与 500（autorouter 自身 bug）。
+ * 只在默认路径懒探死路径上使用；不对外导出。
+ */
+class HttpError extends Error {
+  constructor(public readonly statusCode: number, message: string) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
+
+/**
  * {@link createAutorouterServer} 接受的选项。
  *
  * `env` 用于测试中覆盖进程环境变量。
@@ -204,7 +215,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   });
   const registry = new RuntimeRegistry(logger);
   const bindings = new RouteBindingStore(logger);
-  const supervisor = new ChildBrowserSupervisor(registry, logger);
+  const supervisor = new ChildBrowserSupervisor(registry, logger, policy.restartTimeoutMs);
   const defaultResolver = new DefaultInstanceResolver(policy, registry, logger);
   const wsServer = new WebSocketServer({noServer: true});
 
@@ -236,6 +247,24 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         logger.error('default instance lazy load disabled');
         throw new Error('Default instance lazy load is disabled.');
       }
+      instance = await supervisor.start(instance);
+    } else if (
+      // 默认路径上的 managed 实例：任何非 healthy 状态都交由 supervisor.start 接手。
+      // - `error`: 上一次意外退出，需重拉
+      // - `starting` / `unhealthy`: 并发路径中某个请求已在重拉中，
+      //   本请求 await 同一 inflight Promise 去重
+      // - `stopping`/`reclaiming`: 也交给 supervisor，其内部魔变逻辑会适当处理
+      // 陶路径报告“全他们指望端口可用”语义，不应走 refresh 反复探死。
+      // 显式路径不享受这一路径，走下面的 throw 兑底（500）要求开发者手动 restart。
+      instance.status !== 'healthy' &&
+      instance.mode === 'managed' &&
+      !instanceId
+    ) {
+      logger.info('default instance self-heal triggered', {
+        instanceId: instance.instanceId,
+        previousError: instance.lastError,
+        previousStatus: instance.status,
+      });
       instance = await supervisor.start(instance);
     } else if (instance.status !== 'healthy') {
       instance = await supervisor.refresh(instance.instanceId);
@@ -574,37 +603,77 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
       if (method === 'GET' && compatMatch) {
         const [, rawInstanceId, suffix] = compatMatch;
         const instanceId = rawInstanceId ? decodeURIComponent(rawInstanceId) : undefined;
+        // 默认路径（instanceId === undefined）才享受懒探死与自愈。
+        // 显式路径 fetch 失败仍走 500，要求开发者手动 restart——边界语义参见 architecture §9.2。
+        const allowSelfHeal = instanceId === undefined;
+
+        /** 在已解析实例上执行一次 fetch + suffix 分路。 */
+        const fetchAndRespond = async (resolved: RuntimeInstance): Promise<void> => {
+          if (!resolved.browserUrl) {
+            throw new HttpError(500, `Instance '${resolved.instanceId}' does not have browserUrl for HTTP compat.`);
+          }
+          const downstreamUrl = `${resolved.browserUrl}${suffix}`;
+          if (suffix === '/json/version') {
+            const version = await fetchJson<VersionResponse>(downstreamUrl);
+            json(response, 200, rewriteVersion(version, host, instanceId, resolved.instanceId));
+            return;
+          }
+          if (suffix === '/json/list' || suffix === '/json') {
+            const list = await fetchJson<ListTarget[]>(downstreamUrl);
+            // P1-6: 缓存页面数到实例，供 /api/instances 响应使用
+            registry.update(resolved.instanceId, {pageCount: list.length});
+            json(response, 200, rewriteList(list, host, instanceId, resolved.instanceId));
+            return;
+          }
+          const protocol = await fetchJson<unknown>(downstreamUrl);
+          json(response, 200, protocol);
+        };
+
         const instance = await resolveInstance(instanceId);
-        if (!instance.browserUrl) {
-          throw new Error(`Instance '${instance.instanceId}' does not have browserUrl for HTTP compat.`);
-        }
-
-        const downstreamUrl = `${instance.browserUrl}${suffix}`;
-        if (suffix === '/json/version') {
-          const version = await fetchJson<VersionResponse>(downstreamUrl);
-          json(
-            response,
-            200,
-            rewriteVersion(version, host, instanceId, instance.instanceId),
-          );
+        try {
+          await fetchAndRespond(instance);
           return;
-        }
+        } catch (downstreamError) {
+          // 只有默认路径 + 上游不可达 才走懒探死自愈路径。
+          if (!allowSelfHeal) {
+            throw downstreamError;
+          }
+          const reason = downstreamError instanceof Error ? downstreamError.message : String(downstreamError);
+          logger.warn('default route lazy-probe detected unreachable upstream', {
+            instanceId: instance.instanceId,
+            mode: instance.mode,
+            error: reason,
+          });
 
-        if (suffix === '/json/list' || suffix === '/json') {
-          const list = await fetchJson<ListTarget[]>(downstreamUrl);
-          // P1-6: 缓存页面数到实例，供 /api/instances 响应使用
-          registry.update(instance.instanceId, {pageCount: list.length});
-          json(
-            response,
-            200,
-            rewriteList(list, host, instanceId, instance.instanceId),
-          );
-          return;
-        }
+          // attached 不擅自启动外部 chrome；返回 503 诊断信息。
+          if (instance.mode === 'attached') {
+            registry.update(instance.instanceId, {status: 'unhealthy', lastError: reason});
+            throw new HttpError(503, `attached upstream unreachable: ${reason}`);
+          }
 
-        const protocol = await fetchJson<unknown>(downstreamUrl);
-        json(response, 200, protocol);
-        return;
+          // managed 走 self-heal：supervisor.start 幂等清理 + spawn，然后 retry 一次。
+          // 以 error 状态作为付款诊断：只有下一次请求才会看到“另一次 self-heal 仍不可达”的潜在状态。
+          registry.update(instance.instanceId, {
+            status: 'error',
+            lastError: reason,
+          });
+          let healed: RuntimeInstance;
+          try {
+            healed = await supervisor.start(registry.require(instance.instanceId));
+          } catch (healError) {
+            const healMessage = healError instanceof Error ? healError.message : String(healError);
+            logger.error('default route self-heal failed', {instanceId: instance.instanceId, error: healMessage});
+            throw new HttpError(503, `default instance self-heal failed: ${healMessage}`);
+          }
+          try {
+            await fetchAndRespond(healed);
+            return;
+          } catch (retryError) {
+            const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+            logger.error('default route retry after self-heal failed', {instanceId: instance.instanceId, error: retryMessage});
+            throw new HttpError(503, `default instance unreachable after self-heal: ${retryMessage}`);
+          }
+        }
       }
 
       // P1-5: 非 JSON 路径透明代理（/devtools/* 静态资源等）。
@@ -662,10 +731,12 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
       logger.warn('route not found', {method, path});
       error(response, 404, `Route not found: ${method} ${path}`);
     } catch (requestError) {
-      // 兜底:绝不向 HTTP 客户端泄漏堆栈跟踪。
+      // HttpError 携带明确状态码（如默认路径自愈路径上的 503），其余一律归为 500。
+      // 绝不向 HTTP 客户端泄漏堆栈跟踪。
+      const status = requestError instanceof HttpError ? requestError.statusCode : 500;
       const message = requestError instanceof Error ? requestError.message : String(requestError);
-      logger.error('internal error', {path, error: message});
-      error(response, 500, message);
+      logger.error('internal error', {path, status, error: message});
+      error(response, status, message);
     }
   });
 
