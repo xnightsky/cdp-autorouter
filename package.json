@@ -22,6 +22,7 @@
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build",
     "install:global": "npm run build && npm install -g .",
+    "uninstall:global": "npm uninstall -g cdp-autorouter",
     "dev": "tsx src/server/index.ts",
     "start": "node dist/src/server/index.js",
     "test": "vitest run",
