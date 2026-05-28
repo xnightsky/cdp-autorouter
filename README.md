@@ -98,89 +98,12 @@ attached 模式下若 `browserUrl` 指向 autorouter 自身（如 `http://127.0.
 
 ## Quick Start
 
-所有玩法的共同前置（在项目根目录执行）：
+详见 [QUICKSTART.md](./QUICKSTART.md)。
 
 ```bash
-# cd <项目根目录>
-npm install                    # 安装依赖
-npm run install:global         # 一条命令：build + 全局安装 cdp-autorouter-server / cdp-autorouter-cli
-npm start                      # 启动服务，端口由 .env SERVER_PORT 决定（默认 3100）
+npm install && npm run install:global   # build + 全局安装
+npm start                               # 启动服务
 ```
-
-> `npm install -g .` 不会自动触发 build（npm 不为本地目录安装走 pack 流程）。
-> 必须先 `npm run build` 再 `npm install -g .`，或直接用 `npm run install:global` 一步到位。
-
-如果只想本地开发，不需要全局安装 CLI：
-
-```bash
-npm install
-npm run build
-npm test
-npm run dev
-```
-
-以下命令均为全局可用，任意目录执行：
-
----
-
-### ⭐ 推荐玩法：autorouter + CLI + agent-browser
-
-```bash
-# 以下均为全局命令，任意目录执行
-
-# 连接到 autorouter（端口与 SERVER_PORT 一致）
-cdp-autorouter-cli connect <port>
-
-# 创建并启动实例
-cdp-autorouter-cli create --id dev --mode attached --browser-url http://localhost:9222
-cdp-autorouter-cli start dev
-
-# agent-browser 直接消费
-agent-browser --cdp $(cdp-autorouter-cli get-ws dev)
-
-# 或 chrome-devtools-mcp
-chrome-devtools-mcp --wsEndpoint=$(cdp-autorouter-cli get-ws dev)
-```
-
-`cdp-autorouter-cli get-ws` 输出一行 ws:// 地址，可直接 `$()` 给任何工具消费。
-
----
-
-### 玩法 2：纯 autorouter（curl / 脚本集成）
-
-适合：无 CLI 环境、CI 脚本、快速验证。
-
-```bash
-curl -X POST http://localhost:<port>/api/instances \
-  -H 'Content-Type: application/json' \
-  -d '{"instanceId":"dev","mode":"attached","browserUrl":"http://localhost:9222"}'
-
-curl -X POST http://localhost:<port>/api/instances/dev/start
-
-# 提取 wsEndpoint
-curl -s http://localhost:<port>/instances/dev/json/version | jq -r .webSocketDebuggerUrl
-```
-
----
-
-### 玩法 3：autorouter + Skill（agent 自动化）
-
-适合：agent 无人工干预，通过 skill 自行操作 autorouter。
-
-```bash
-# 安装 skill 到 agent 环境（一次性）
-npx skills add cdp-autorouter
-
-# agent 加载 skill 后自动执行：
-#   POST /api/instances → start → get-ws → 传给 agent-browser
-
-# 如果已装 CLI，agent 也可以直接用：
-cdp-autorouter-cli skills get cdp-autorouter-cli   # 动态加载完整指令集
-```
-
----
-
-三种玩法是同一套 Admin API 的三种消费形态：CLI 给人用，curl 给脚本用，Skill 给 agent 用。
 
 ---
 
