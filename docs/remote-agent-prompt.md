@@ -94,11 +94,6 @@ agent-browser --cdp $(cdp-autorouter-cli get-ws task1)
 
 ---
 
-## 网络约束
-
-- 本机无外网直连，所有 curl 命令使用 `curl_proxy_7890`
-- 127.0.0.1 虽在 no_proxy 范围，但统一使用包装命令避免遗忘
-
 ## 语义区分
 
 | API | 返回内容 |
