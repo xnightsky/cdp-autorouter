@@ -3,93 +3,142 @@
 ## 架构
 
 ```
-[AI CLI / agent-browser]  ──CDP──▶  [autorouter :9223]  ──CDP──▶  [远端 headed Chrome]
+[agent-browser / AI CLI]  ──CDP──▶  [autorouter :9223]  ──CDP──▶  [远端 headed Chrome]
 ```
 
-- **9223 端口**：cdp-autorouter 代理层，SSH 转发到远端
-- **远端 Chrome**：headed 模式，GUI 可见（Windows 远程桌面可观察）
-- autorouter 透明转发 CDP，不修改消息内容
+- **9223 端口**：cdp-autorouter 代理层，SSH 转发到远端 Windows
+- **远端 Chrome**：headed 模式，GUI 可见
+- autorouter 支持多实例，每个实例对应一个独立 Chrome 进程
 
 ---
 
-## agent-browser 操作
+## 两种连接方式（二选一，不混用）
 
-### 连接
+### 方式 A：default 实例快捷模式
+
+适用：只有一个实例，或你明确只操作 default 实例。
 
 ```bash
 agent-browser connect 9223
-```
-
-### 打开页面（新 tab）
-
-```bash
-agent-browser open https://example.com
+agent-browser tab list
+agent-browser navigate "http://..."
 agent-browser snapshot -i
 agent-browser screenshot
 ```
 
-### ⚠️ 已知行为：open 创建新 tab
+`connect 9223` 建立持久会话，后续命令复用该连接，始终操作 default 实例。
 
-`connect` 后 `open` 会在 Chrome 中**新建一个 tab**，不会复用已有 tab。
-这是 agent-browser 的标准行为（Playwright `Target.createTarget`）。
+### 方式 B：指定实例模式（多实例场景）
 
-如需在已有 tab 中导航：
-
-```bash
-agent-browser connect 9223
-agent-browser tab list                   # 查看 tab 列表
-agent-browser tab t1                     # 切到目标 tab
-agent-browser navigate https://target.com  # 在该 tab 内导航
-```
-
-### 常用操作
+适用：存在多个实例，需要精确控制操作哪个。
 
 ```bash
-agent-browser snapshot -i                # 交互元素快照
-agent-browser screenshot [path]          # 截图
-agent-browser click @e3                  # 点击元素
-agent-browser fill @e1 "text"             # 填写输入框
-agent-browser tab new [url]              # 新开 tab
-agent-browser tab close                  # 关闭当前 tab
-agent-browser close --all                # 关闭所有 session
-```
-
-### 错误写法
-
-```bash
-# ❌ 会尝试启动本地 Chrome，本机无 X server 必失败
-agent-browser --cdp 9223 open https://example.com
-
-# ❌ --headed 也是启动本地 Chrome，与远端无关
-agent-browser open --headed https://example.com
-```
-
----
-
-## chrome-devtools MCP
-
-MCP 已配置连接 9223 端口，直接使用 DevTools 工具即可。
-
-> ⚠️ **冲突避免**：agent-browser 和 chrome-devtools MCP 不可同时操作同一浏览器实例。
-
----
-
-## 多实例管理（需要时）
-
-```bash
-# 查看实例
+# 先查看有哪些实例
 cdp-autorouter-cli list
 
-# 创建实例
-cdp-autorouter-cli create --id task1 --mode attached --browser-url http://10.0.0.5:9222
+# 直连指定实例（每条命令独立，无副作用）
+agent-browser --cdp $(cdp-autorouter-cli get-ws <实例ID>) tab list
+agent-browser --cdp $(cdp-autorouter-cli get-ws <实例ID>) navigate "http://..."
+agent-browser --cdp $(cdp-autorouter-cli get-ws <实例ID>) snapshot -i
+```
 
-# 启动 / 切换默认 / 停止
+`--cdp` 模式不依赖 default 指向，不改变任何全局状态。
+
+### ⚠️ 不要混用
+
+选定一种方式后保持一致。不要用 `switch` 在两种模式间切换。
+
+---
+
+## ⚠️ switch 的正确理解
+
+```bash
+cdp-autorouter-cli switch <id>
+```
+
+**用途**：一次性设定 autorouter 的全局 default 指向（决定方式 A 连到哪个实例）。
+
+**合理场景**：管理员决定"哪个实例是主力"，设定后不再频繁改动。
+
+**禁止用法**：把 switch 当临时切换来回用。
+
+```bash
+# ❌ 切过去操作一下再切回来——这会搞乱全局状态
+cdp-autorouter-cli switch e2e-1
+agent-browser connect 9223
+# ...操作...
+cdp-autorouter-cli switch default   # default 可能已被 self-heal 重启，页面丢了
+```
+
+要临时操作非 default 实例，直接用方式 B：
+
+```bash
+# ✅ 不动全局状态，直连目标
+agent-browser --cdp $(cdp-autorouter-cli get-ws e2e-1) tab list
+```
+
+---
+
+## 常用操作
+
+```bash
+# 查看实例列表
+cdp-autorouter-cli list
+
+# 获取指定实例的 ws 地址（可直接喂给 --cdp）
+cdp-autorouter-cli get-ws <id>
+cdp-autorouter-cli get-ws          # 省略 id = 获取 default 实例
+
+# 在指定实例上操作
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) tab list
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) navigate "http://target.com"
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) snapshot -i
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) screenshot
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) click @e3
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) fill @e1 "text"
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) eval "document.title"
+```
+
+### Tab 管理
+
+```bash
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) tab list
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) tab t2      # 切到 t2
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) tab new [url]
+agent-browser --cdp $(cdp-autorouter-cli get-ws myinst) tab close
+```
+
+---
+
+## 错误写法
+
+```bash
+# ❌ --cdp 后面跟端口号（不是 ws URL）
+agent-browser --cdp 9223 open https://example.com
+
+# ❌ 会尝试启动本地 Chrome，远端无 X server 必失败
+agent-browser open --headed https://example.com
+
+# ❌ 用 switch 临时切实例（改全局状态，影响所有方式 A 客户端）
+cdp-autorouter-cli switch task1 && agent-browser connect 9223
+```
+
+---
+
+## 实例生命周期（按需）
+
+```bash
+# 创建新实例
+cdp-autorouter-cli create --id task1 --mode managed
+cdp-autorouter-cli create --id ext1 --mode attached --browser-url http://10.0.0.5:9222
+
+# 启动 / 停止 / 重启
 cdp-autorouter-cli start task1
-cdp-autorouter-cli switch task1
 cdp-autorouter-cli stop task1
+cdp-autorouter-cli restart task1
 
-# agent-browser 连接指定实例
-agent-browser --cdp $(cdp-autorouter-cli get-ws task1)
+# 删除
+cdp-autorouter-cli delete task1
 ```
 
 ---
@@ -98,7 +147,14 @@ agent-browser --cdp $(cdp-autorouter-cli get-ws task1)
 
 | API | 返回内容 |
 |-----|----------|
-| `GET /api/instances` | autorouter 管理的实例列表 |
-| `GET /json/list` | 某 Chrome 下的 page targets |
+| `cdp-autorouter-cli list` | autorouter 管理的实例列表（每个实例 = 一个 Chrome 进程） |
+| `/json/list`（或 `tab list`） | 某个 Chrome 实例内的 page targets（tabs） |
 
 两者不互换。
+
+---
+
+## 冲突避免
+
+- agent-browser 和 chrome-devtools MCP 不可同时操作同一实例
+- 多 agent 操作不同实例互不干扰（各自用 `--cdp $(get-ws <各自实例>)`）
