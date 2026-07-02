@@ -148,6 +148,26 @@ export class ChildBrowserSupervisor {
     // Only injected when the executable looks like a Chrome/Chromium binary.
     const isChrome = /chrome|chromium/i.test(executablePath);
     const baselineArgs = isChrome ? ['--no-first-run', '--no-default-browser-check'] : [];
+    // Linux root 下 Chromium 拒绝无沙箱启动（crbug.com/638180）：zygote 立即退出，
+    // 对外只表现为健康检查超时、极难定位。root 时自动注入 --no-sandbox；
+    // --disable-dev-shm-usage 规避容器/小 /dev/shm 机器的页崩溃。
+    if (
+      isChrome &&
+      process.platform === 'linux' &&
+      typeof process.getuid === 'function' &&
+      process.getuid() === 0
+    ) {
+      baselineArgs.push('--no-sandbox', '--disable-dev-shm-usage');
+    }
+    // 无 DISPLAY 的 Linux 上开有头窗口必然失败。这里**不做静默补偿**（自动转 headless
+    // 会掩盖调用方真实意图，如准备接 Xvfb/X 转发的场景），直接 fail-fast 报明确错误。
+    if (process.platform === 'linux' && !process.env.DISPLAY && instance.headless !== true) {
+      throw new Error(
+        `Managed instance '${instance.instanceId}' 无法在无 DISPLAY 的 Linux 环境开有头窗口：` +
+          `请显式指定 headless=true（HTTP API 创建实例时传入；CLI create 暂无 --headless 旗标），` +
+          `或先提供 DISPLAY（Xvfb / X11 转发）再启动。`,
+      );
+    }
     const args = [
       ...baselineArgs,
       ...instance.chromeLaunchArgs,

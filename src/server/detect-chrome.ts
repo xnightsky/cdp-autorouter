@@ -82,5 +82,7 @@ export function detectChromePath(): string | undefined {
     const resolved = whichSync(cmd);
     if (resolved) return resolved;
   }
+  // 刻意不做更多魔法探测（如 playwright/puppeteer 缓存目录）：
+  // 非标准位置的浏览器一律要求显式 CHROME_EXECUTABLE_PATH，保持行为可预期。
   return undefined;
 }
