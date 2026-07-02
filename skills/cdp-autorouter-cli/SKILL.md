@@ -13,17 +13,22 @@ autorouter, 实例管理, browser instance, get-ws, wsEndpoint, CDP proxy
 
 ## 端口解析优先级
 
-`--port` flag > `AUTOROUTER_URL` 环境变量 > `.autorouter` 文件（向上查找） > 默认 3100
+`--port` flag > `AUTOROUTER_URL` 环境变量 > `.autorouter` 文件（cwd 向上查找） > `~/.autorouter`（全局兜底） > 默认 3100
+
+> 全局档案适合「一台机器一个 server」的常态：cwd 在别的盘符/目录树时向上查找走不到 home，靠它兜底。
 
 ## 命令参考
 
 ### 连接管理
 
 ```bash
-# 持久化端口（写入 .autorouter 文件）
+# 持久化端口（写入 ./.autorouter，目录级、就近优先）
 cdp-autorouter-cli connect 9300
 
-# 清除持久化连接
+# 持久化到全局 ~/.autorouter（--global / -g；任意目录树下都能兜底发现）
+cdp-autorouter-cli connect 9223 --global
+
+# 清除持久化连接（删发现逻辑命中的那份：本地优先，本地全无时删全局）
 cdp-autorouter-cli disconnect
 ```
 

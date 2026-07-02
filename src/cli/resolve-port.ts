@@ -6,13 +6,16 @@
  *   2. `AUTOROUTER_URL` 环境变量  —— 会话级覆盖（适合 CI / 脚本导出一次全程生效）；
  *   3. `.autorouter` 档案文件     —— 目录级持久化（`connect` 命令写入；从 cwd 向上逐级查找，
  *      因此可以在仓库根放一份、任意子目录内执行 CLI 都能命中）；
- *   4. 默认 3100                  —— 以上全落空时的兜底。
+ *   4. `~/.autorouter` 全局档案   —— 向上查找走不到的树外兜底（如 cwd 在别的盘符/目录树），
+ *      `connect --global` 写入，适合「一台机器一个 server」的常态；
+ *   5. 默认 3100                  —— 以上全落空时的兜底。
  *
  * ⚠️ 常见坑：server 实际监听端口以 server 自己的 config 为准，可能不是 3100
  * （本机约定 9223）。连不上时先核对 `.autorouter` / `--port` 指向是否正确。
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const DEFAULT_PORT = 3100;
@@ -25,11 +28,17 @@ export interface ResolvedEndpoint {
 }
 
 /**
- * 从 startDir 起**逐级向上**查找 `.autorouter` 档案，返回首个命中的绝对路径；到文件系统根仍未命中返回 null。
+ * 从 startDir 起**逐级向上**查找 `.autorouter` 档案；全程未命中再嗅探一次 `~/.autorouter`
+ * 全局档案；两处都没有返回 null。
  *
- * 向上查找的动机：档案通常放在仓库根，而 CLI 可能在任意子目录被调用（类比 .git/.editorconfig 的查找语义）。
+ * 向上查找的动机：档案通常放在仓库根，而 CLI 可能在任意子目录被调用（类比 .git/.editorconfig
+ * 的查找语义）。home 兜底的动机：cwd 不在 home 目录树下时（如 Windows 上 D:\ 工作区 vs
+ * C:\Users 的 home），向上查找永远走不到 home——全局档案就是给「一台机器一个 server」
+ * 的常态场景用的。
+ *
+ * @param home 可注入的 home 目录（默认 os.homedir()；测试用它隔离真实环境）
  */
-export function findConfigFile(startDir: string): string | null {
+export function findConfigFile(startDir: string, home: string = os.homedir()): string | null {
   let dir = path.resolve(startDir);
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -40,6 +49,11 @@ export function findConfigFile(startDir: string): string | null {
     const parent = path.dirname(dir);
     if (parent === dir) break; // dirname 不再变化 = 已到文件系统根（如 `/` 或 `C:\`），终止上探
     dir = parent;
+  }
+  // 树外兜底：全局档案（就近优先——只有向上查找全落空才轮到它）
+  const globalCandidate = path.join(home, CONFIG_FILENAME);
+  if (fs.existsSync(globalCandidate)) {
+    return globalCandidate;
   }
   return null;
 }
@@ -73,10 +87,11 @@ export function writeConfigFile(dir: string, port: number): string {
 /**
  * 删除 `.autorouter` 档案（`disconnect` 命令）。
  *
- * 注意删除的是**向上查找命中的那一份**（可能在父目录），返回是否真的删了。
+ * 删除的是**发现逻辑命中的那一份**（就近优先：可能在父目录，本地全无时是 `~/.autorouter`）。
+ * 本地与全局同时存在时只删本地——再跑一次即可删到全局，语义与发现顺序一致。
  */
-export function removeConfigFile(startDir: string): boolean {
-  const found = findConfigFile(startDir);
+export function removeConfigFile(startDir: string, home: string = os.homedir()): boolean {
+  const found = findConfigFile(startDir, home);
   if (found) {
     fs.unlinkSync(found);
     return true;
@@ -113,8 +128,10 @@ export function resolveEndpoint(options: {
   portFlag?: number;
   env?: Record<string, string | undefined>;
   cwd?: string;
+  /** 可注入的 home 目录（全局档案 `~/.autorouter` 的所在；测试用它隔离真实环境） */
+  home?: string;
 }): ResolvedEndpoint {
-  const { portFlag, env = process.env, cwd = process.cwd() } = options;
+  const { portFlag, env = process.env, cwd = process.cwd(), home = os.homedir() } = options;
 
   let port: number | null = null;
 
@@ -128,9 +145,9 @@ export function resolveEndpoint(options: {
     port = parseEnvUrl(env.AUTOROUTER_URL);
   }
 
-  // 3. .autorouter file
+  // 3. .autorouter 档案（cwd 向上 → ~/.autorouter 全局兜底，见 findConfigFile）
   if (port === null) {
-    const configPath = findConfigFile(cwd);
+    const configPath = findConfigFile(cwd, home);
     if (configPath) {
       port = readConfigFile(configPath);
     }

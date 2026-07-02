@@ -11,6 +11,8 @@
  * - 消费口：get-ws —— 打 CDP 兼容路由，输出单行 ws:// 供 $() 内联消费。
  */
 
+import os from 'node:os';
+
 import {
   resolveEndpoint,
   writeConfigFile,
@@ -108,6 +110,9 @@ async function main(): Promise<void> {
   // connect/disconnect 是纯本地档案操作（写/删 .autorouter），不发任何网络请求——
   // 所以放在 resolveEndpoint 之前处理，server 没起也能用。
   if (command === 'connect') {
+    // --global：档案写到 ~/.autorouter（全局），供任意目录树下的 CLI 兜底发现；
+    // 缺省写 cwd（目录级，就近优先，可按项目各连各的 server）
+    const globalMode = hasFlag(args, '--global') || hasFlag(args, '-g');
     // connect 的位置参数 = 要持久化的端口号；缺省时退回 --port 值，再缺省用 3100
     const port = parseInt(args[0] ?? String(portFlag ?? 3100), 10);
     if (!port || port <= 0) {
@@ -115,7 +120,8 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const filePath = writeConfigFile(process.cwd(), port);
+    const targetDir = globalMode ? os.homedir() : process.cwd();
+    const filePath = writeConfigFile(targetDir, port);
     process.stdout.write(`Connected to port ${port} (saved to ${filePath})\n`);
     return;
   }
@@ -308,8 +314,9 @@ function printUsage(): void {
 Usage: cdp-autorouter-cli [--port <port>] [--json] <command> [args]
 
 Commands:
-  connect [port]       Save port to .autorouter file (default: 3100)
-  disconnect           Remove .autorouter file
+  connect [port]       Save port to ./.autorouter (default: 3100)
+  connect [port] --global   Save to ~/.autorouter (machine-wide fallback)
+  disconnect           Remove nearest .autorouter (falls back to ~/.autorouter)
   list                 List all instances (with live health check)
   create               Create instance (--id <id> --mode <mode> [--browser-url <url>])
   start <id>           Start instance
@@ -323,7 +330,7 @@ Commands:
   skills get <name>    Output skill content
   skills get --all     Output all skills
 
-Port resolution: --port > AUTOROUTER_URL env > .autorouter file > 3100
+Port resolution: --port > AUTOROUTER_URL env > .autorouter (cwd upward) > ~/.autorouter > 3100
 `);
 }
 
