@@ -12,6 +12,19 @@
 
 ---
 
+## 前置：一次性全局连接（默认做法）
+
+```bash
+# 把 9223 写入 ~/.autorouter（--global）：此后任意目录下的 cdp-autorouter-cli
+# 都能自动发现端口，免去每条命令带 --port。
+# ⚠️ 不做这步的后果：CLI 内置默认 3100 ≠ 本环境 9223，所有命令直接连错端口。
+cdp-autorouter-cli connect 9223 --global
+```
+
+端口发现优先级：`--port` > `AUTOROUTER_URL` env > `./.autorouter`（cwd 向上查找） > `~/.autorouter` > 默认 3100。
+
+---
+
 ## 两种连接方式（二选一，不混用）
 
 ### 方式 A：default 实例快捷模式
