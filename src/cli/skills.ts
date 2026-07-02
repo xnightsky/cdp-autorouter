@@ -1,7 +1,9 @@
 /**
- * skills 子命令 — 列出和输出打包在 CLI 中的 skill 内容。
+ * skills 子命令实现 —— 列出/输出随 npm 包发布的 skill 文档。
  *
- * skills/ 目录随 npm 包发布，CLI 从中读取完整 skill 内容。
+ * 动机：让 agent 在任何装了本 CLI 的机器上，通过 `skills get <name>` 一条命令
+ * 拿到工具的使用说明（SKILL.md 全文），无需依赖联网或外部文档库。
+ * skills/ 目录结构约定：`skills/<name>/SKILL.md`，目录名即 skill 名。
  */
 
 import fs from 'node:fs';
@@ -12,18 +14,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * 定位 skills 目录。
- * 源码运行（tsx/vitest）：__dirname = src/cli/ → 向上 2 层到项目根
- * 编译后运行：__dirname = dist/src/cli/ → 向上 3 层到项目根
+ *
+ * 难点：本文件的 __dirname 随运行形态漂移——
+ *   源码直跑（tsx/vitest）：`src/cli/`   → 向上 2 层到项目根；
+ *   编译产物运行：        `dist/src/cli/` → 向上 3 层到项目根。
+ * 与其对形态分支，不如统一「向上逐层探测 skills/ 子目录」（上限 5 层防呆），
+ * 两种形态自然都命中，将来目录结构小调也不易碎。
  */
 function getSkillsDir(): string {
-  // 从当前位置向上查找 skills 目录
   let dir = __dirname;
   for (let i = 0; i < 5; i++) {
     const candidate = path.join(dir, 'skills');
     if (fs.existsSync(candidate)) return candidate;
     dir = path.dirname(dir);
   }
-  // fallback
+  // 5 层内都没命中的兜底：按「编译产物」形态硬拼路径（即使不存在，
+  // 上层 listSkills/getSkillContent 也会以 existsSync 优雅处理成空结果）
   return path.resolve(__dirname, '..', '..', '..', 'skills');
 }
 
@@ -32,7 +38,7 @@ export interface SkillInfo {
   path: string;
 }
 
-/** 列出所有可用 skills。 */
+/** 列出所有可用 skills（只认「目录 + 内含 SKILL.md」的条目，散文件/缺主文档的目录不算）。 */
 export function listSkills(): SkillInfo[] {
   const dir = getSkillsDir();
   if (!fs.existsSync(dir)) return [];
@@ -44,7 +50,7 @@ export function listSkills(): SkillInfo[] {
     .map(e => ({ name: e.name, path: path.join(dir, e.name, 'SKILL.md') }));
 }
 
-/** 获取单个 skill 的完整内容。 */
+/** 读取单个 skill 的 SKILL.md 全文；skill 不存在返回 null（由命令层报「not found」）。 */
 export function getSkillContent(name: string): string | null {
   const dir = getSkillsDir();
   const skillPath = path.join(dir, name, 'SKILL.md');
@@ -52,7 +58,7 @@ export function getSkillContent(name: string): string | null {
   return fs.readFileSync(skillPath, 'utf8');
 }
 
-/** 获取所有 skills 的内容，以分隔符连接。 */
+/** 拼接输出全部 skills（`--- <name> ---` 分隔符便于 agent 按篇切分），供一次性整体加载。 */
 export function getAllSkillsContent(): string {
   const skills = listSkills();
   if (skills.length === 0) return 'No skills available.';

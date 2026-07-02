@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 /**
- * cdp-autorouter-cli — 控制面客户端入口。
+ * cdp-autorouter-cli —— 控制面客户端入口（命令分发层）。
  *
- * 手动解析 argv，零额外依赖。
+ * 手写 argv 解析、零第三方依赖：CLI 追求「npm -g 装完即跑」，命令面很小
+ * （十来个动词 + 两个全局旗标），不值得引 commander/yargs 这类解析库。
+ *
+ * 命令分三类：
+ * - 纯本地：connect / disconnect（读写 .autorouter 档案）、skills（读包内文档）——不碰网络；
+ * - 控制面：list / create / start / stop / restart / switch / status / delete —— 打 Admin API；
+ * - 消费口：get-ws —— 打 CDP 兼容路由，输出单行 ws:// 供 $() 内联消费。
  */
 
 import {
@@ -15,8 +21,13 @@ import { listSkills, getSkillContent, getAllSkillsContent } from './skills.js';
 
 // --- argv 解析工具 ---
 
-/** 从 args 中提取并移除指定的命名参数，支持 `--name value` 和 `--name=value` 两种格式。 */
-
+/**
+ * 从 args 中提取指定命名参数的值，并**就地移除**该参数（splice 原数组）。
+ *
+ * 支持 `--name value` 与 `--name=value` 两种写法。「提取即移除」是刻意设计：
+ * 旗标可以出现在任意位置（命令前后皆可），全部提完后 args 里只剩命令与位置参数，
+ * 后续 `args.shift()` / `args[0]` 取位置参数时无需再绕开旗标。
+ */
 function extractFlag(args: string[], name: string): string | undefined {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === name && i + 1 < args.length) {
@@ -33,7 +44,7 @@ function extractFlag(args: string[], name: string): string | undefined {
   return undefined;
 }
 
-/** 检查并移除布尔标志（如 --json）。 */
+/** 检查布尔旗标（如 `--json`）是否存在，并就地移除（理由同 extractFlag：让位置参数保持干净）。 */
 function hasFlag(args: string[], name: string): boolean {
   const idx = args.indexOf(name);
   if (idx >= 0) { args.splice(idx, 1); return true; }
@@ -42,14 +53,22 @@ function hasFlag(args: string[], name: string): boolean {
 
 // --- 输出工具 ---
 
+/** `--json` 模式的机器可读输出（两空格缩进，方便人眼与 jq 兼得）。 */
 function printJson(data: unknown): void {
   process.stdout.write(JSON.stringify(data, null, 2) + '\n');
 }
 
+/** 错误统一写 stderr（stdout 留给数据输出，保证 `$()` / 管道消费不被错误信息污染）。 */
 function printError(msg: string): void {
   process.stderr.write(`Error: ${msg}\n`);
 }
 
+/**
+ * 人类可读的等宽表格输出（`list` 命令默认视图）。
+ *
+ * 列集取第一行的 keys；每列宽度 = 表头与所有单元格的最大长度，逐列 padEnd 对齐。
+ * 只做 ASCII 对齐，不处理东亚全角宽度——当前列值均为 id/状态类 latin 文本，够用。
+ */
 function printTable(rows: Record<string, unknown>[]): void {
   if (rows.length === 0) {
     process.stdout.write('(empty)\n');
@@ -73,7 +92,8 @@ function printTable(rows: Record<string, unknown>[]): void {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  // 全局参数：在命令解析前先提取，因为它们可以出现在命令前面
+  // 全局旗标先于命令解析提取：它们允许出现在命令词前面（如 `cli --port 9223 list`），
+  // 若不先摘掉，args.shift() 会把 `--port` 误当成命令词。
   const portStr = extractFlag(args, '--port');
   const portFlag = portStr ? parseInt(portStr, 10) : undefined;
   const jsonMode = hasFlag(args, '--json');
@@ -85,9 +105,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  // connect/disconnect 是纯本地操作，不需要网络
+  // connect/disconnect 是纯本地档案操作（写/删 .autorouter），不发任何网络请求——
+  // 所以放在 resolveEndpoint 之前处理，server 没起也能用。
   if (command === 'connect') {
-    // connect 的位置参数是要持久化的端口号
+    // connect 的位置参数 = 要持久化的端口号；缺省时退回 --port 值，再缺省用 3100
     const port = parseInt(args[0] ?? String(portFlag ?? 3100), 10);
     if (!port || port <= 0) {
       printError('Invalid port number');
@@ -109,13 +130,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  // skills 子命令是纯本地操作，不需要网络
+  // skills 子命令读的是随 npm 包发布的本地文档，同样不需要 server 在线
   if (command === 'skills') {
     handleSkills(args, jsonMode);
     return;
   }
 
-  // 以下命令需要连接 autorouter 服务
+  // 以下全部命令都要打 autorouter 服务：此刻才解析端点（本地命令不受端口配置影响）
   const endpoint = resolveEndpoint({ portFlag });
   const baseUrl = endpoint.baseUrl;
 
@@ -216,10 +237,12 @@ async function main(): Promise<void> {
     }
 
     case 'get-ws': {
-      const id = args[0]; // 可选，省略时返回默认实例
+      const id = args[0]; // 位置参数可选：省略 = 取默认实例（server 侧 switch 决定谁是默认）
       const res = await api.getWsEndpoint(baseUrl, id);
       if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
-      // get-ws 始终只输出一行 ws:// 地址，可直接 $() 给工具消费
+      // 输出契约：stdout 恒为单行 ws:// 地址、无任何装饰——这是给
+      // `agent-browser --cdp $(cdp-autorouter-cli get-ws <id>)` 之类 $() 内联消费设计的，
+      // 加任何前缀/颜色都会破坏下游。错误一律走 stderr（见 printError）。
       process.stdout.write(res.data + '\n');
       return;
     }
@@ -231,6 +254,10 @@ async function main(): Promise<void> {
   }
 }
 
+/**
+ * `skills` 子命令分发：`list`（缺省）列名单；`get <name>` 输出单篇全文；
+ * `get --all` 输出全部（拼接后供 agent 一次性加载）。全部读本地包内文件，不依赖 server。
+ */
 function handleSkills(args: string[], jsonMode: boolean): void {
   const sub = args[0];
 
@@ -274,6 +301,7 @@ function handleSkills(args: string[], jsonMode: boolean): void {
   process.exitCode = 1;
 }
 
+/** 帮助文本（输出保持英文：CLI 面向终端/脚本消费，与命令名、旗标同语言）。 */
 function printUsage(): void {
   process.stdout.write(`cdp-autorouter-cli - Control plane client for cdp-autorouter
 
@@ -299,6 +327,8 @@ Port resolution: --port > AUTOROUTER_URL env > .autorouter file > 3100
 `);
 }
 
+// 顶层兜底：任何未捕获异常都转成一行 stderr 错误 + 非零退出码，
+// 保证脚本消费方能靠 exit code 判定失败，而不是看到裸堆栈。
 main().catch((err: unknown) => {
   printError(err instanceof Error ? err.message : String(err));
   process.exitCode = 1;
