@@ -1,6 +1,8 @@
 # local planning / runtime state
 .tmp/
 data/
+# operation logs (server/cli) default directory; keep logs out of git
+data/logs/
 
 # dependencies / build output
 node_modules/

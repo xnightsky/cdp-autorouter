@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import type {LogLevel, Logger, LoggerOptions} from './types.js';
+import type {LogLevel, Logger, LoggerOptions, OperationLogger} from './types.js';
 
 /** 日志级别的数值优先级（越大越详细）。 */
 const LEVEL_PRIORITY: Record<LogLevel, number> = {
@@ -213,6 +213,61 @@ export function createLogger(options: LoggerOptions): Logger {
     debug(msg, ctx) { log('debug', msg, ctx); },
     async destroy() {
       await fileWriter?.destroy();
+    },
+  };
+}
+
+/** 确保目录存在；不存在时惰性创建（递归）。 */
+function ensureDir(dir: string): void {
+  if (fs.existsSync(dir)) return;
+  fs.mkdirSync(dir, {recursive: true});
+}
+
+/**
+ * 创建操作日志记录器。
+ *
+ * - 输出文件固定为 `{logDir}/{component}-operations.log`；
+ * - 格式固定为单行 JSON，便于日志聚合与审计；
+ * - disabled 时所有方法均为空操作，不产生文件 I/O；
+ * - 写入同步但无缓冲（操作日志量小，且需要在崩溃前立即落盘）。
+ *
+ * @param options - 启用开关、目录、组件名（server/cli）。
+ */
+export function createOperationLogger(options: {
+  enabled: boolean;
+  logDir: string;
+  component: 'server' | 'cli';
+}): OperationLogger {
+  if (!options.enabled) {
+    return {
+      log() { /* 操作日志已禁用，保持静默 */ },
+      async destroy() { /* noop */ },
+    };
+  }
+
+  ensureDir(options.logDir);
+  const filePath = path.join(options.logDir, `${options.component}-operations.log`);
+
+  return {
+    log(operation, details) {
+      const payload: Record<string, unknown> = {
+        timestamp: formatTimestamp(),
+        component: options.component,
+        operation,
+      };
+      if (details && Object.keys(details).length > 0) {
+        Object.assign(payload, details);
+      }
+      try {
+        fs.appendFileSync(filePath, JSON.stringify(payload) + '\n', 'utf8');
+      } catch (err: unknown) {
+        // 操作日志写入失败不应阻断业务；降级到 stderr 并附带原始错误信息。
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[operation-log-error] ${message}\n`);
+      }
+    },
+    async destroy() {
+      // 同步写入无需额外刷盘，保留接口统一性。
     },
   };
 }

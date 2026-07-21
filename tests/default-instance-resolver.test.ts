@@ -17,6 +17,8 @@ describe('DefaultInstanceResolver logger integration', () => {
       restartTimeoutMs: 8000,
       logLevel: 'info' as const,
       logFormat: 'pretty' as const,
+      logOperationsEnabled: false,
+      logDir: 'data/logs',
       defaultInstanceTemplate: {
         instanceId: 'default',
         mode: 'attached' as const,
@@ -41,6 +43,8 @@ describe('DefaultInstanceResolver logger integration', () => {
       restartTimeoutMs: 8000,
       logLevel: 'info' as const,
       logFormat: 'pretty' as const,
+      logOperationsEnabled: false,
+      logDir: 'data/logs',
       defaultInstanceTemplate: {
         instanceId: 'default',
         mode: 'attached' as const,
@@ -64,6 +68,8 @@ describe('DefaultInstanceResolver logger integration', () => {
       restartTimeoutMs: 8000,
       logLevel: 'info' as const,
       logFormat: 'pretty' as const,
+      logOperationsEnabled: false,
+      logDir: 'data/logs',
       defaultInstanceTemplate: {
         instanceId: 'default',
         mode: 'attached' as const,

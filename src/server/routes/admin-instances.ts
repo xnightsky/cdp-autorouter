@@ -115,6 +115,11 @@ function createInstance(): Route {
         remoteDebuggingPort: body.remoteDebuggingPort,
         executablePath: body.executablePath,
       });
+      ctx.operationLogger.log('instance:create', {
+        instanceId: instance.instanceId,
+        mode: instance.mode,
+        source: instance.source,
+      });
       json(res, 201, serializeInstance(instance, ctx.getDefaultInstanceId(), host));
     },
   };
@@ -127,6 +132,7 @@ function reclaimManaged(): Route {
     methods: ['POST'],
     pattern: compile('/api/instances/reclaim-managed'),
     handle: async (ctx, _req, res) => {
+      ctx.operationLogger.log('instance:reclaim-managed');
       await ctx.supervisor.reclaimManaged();
       json(res, 200, {reclaimed: true});
     },
@@ -157,19 +163,23 @@ function instanceActions(): Route {
       }
       if (method === 'DELETE' && !action) {
         ctx.registry.delete(instanceId);
+        ctx.operationLogger.log('instance:delete', {instanceId});
         json(res, 200, {deleted: true});
         return;
       }
       if (method === 'POST' && action === 'start') {
+        ctx.operationLogger.log('instance:start', {instanceId});
         json(res, 200, ser(await ctx.supervisor.start(ctx.registry.require(instanceId))));
         return;
       }
       if (method === 'POST' && action === 'stop') {
+        ctx.operationLogger.log('instance:stop', {instanceId});
         await ctx.supervisor.stop(instanceId);
         json(res, 200, ser(ctx.registry.require(instanceId)));
         return;
       }
       if (method === 'POST' && action === 'restart') {
+        ctx.operationLogger.log('instance:restart', {instanceId});
         await ctx.supervisor.stop(instanceId);
         const restarted = await ctx.supervisor.start(ctx.registry.require(instanceId));
         json(res, 200, ser(restarted));
@@ -207,7 +217,12 @@ function instanceActions(): Route {
           error(res, 409, `Cannot switch to instance '${instanceId}': status is '${inst.status}', must be 'healthy'.`);
           return;
         }
+        const previousDefaultInstanceId = ctx.getDefaultInstanceId();
         ctx.setDefaultInstanceId(instanceId);
+        ctx.operationLogger.log('instance:switch-default', {
+          instanceId,
+          previousDefaultInstanceId,
+        });
         json(res, 200, ser(inst));
         return;
       }

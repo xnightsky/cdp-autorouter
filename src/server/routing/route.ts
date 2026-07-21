@@ -7,7 +7,7 @@ import type {ChildBrowserSupervisor} from '../child-browser-supervisor.js';
 import type {DefaultInstanceResolver} from '../default-instance-resolver.js';
 import type {RouteBindingStore} from '../route-bindings.js';
 import type {RuntimeRegistry} from '../runtime-registry.js';
-import type {EnvPolicy, Logger, RuntimeInstance} from '../types.js';
+import type {EnvPolicy, Logger, OperationLogger, RuntimeInstance} from '../types.js';
 import type {CompiledPattern} from './pattern.js';
 
 /**
@@ -33,6 +33,7 @@ export type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 export interface RouteContext {
   readonly policy: EnvPolicy;
   readonly logger: Logger;
+  readonly operationLogger: OperationLogger;
   readonly registry: RuntimeRegistry;
   readonly bindings: RouteBindingStore;
   readonly supervisor: ChildBrowserSupervisor;

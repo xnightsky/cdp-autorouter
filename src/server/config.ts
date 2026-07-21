@@ -14,7 +14,7 @@ import type {EnvPolicy, InstanceMode, LogLevel} from './types.js';
  * `.env`. Returns `undefined` if no `package.json` is found before the
  * filesystem root.
  */
-function findPackageRoot(startDir: string): string | undefined {
+export function findPackageRoot(startDir: string): string | undefined {
   let current = startDir;
   // Bound the walk to avoid infinite loops on broken filesystems.
   for (let i = 0; i < 16; i++) {
@@ -28,6 +28,22 @@ function findPackageRoot(startDir: string): string | undefined {
     current = parent;
   }
   return undefined;
+}
+
+/**
+ * 解析仓库根目录（package.json 所在目录）。
+ *
+ * 用于把相对路径的日志目录锚定到仓库根，而非进程启动时的 CWD，
+ * 避免在不同子目录执行 CLI 时日志散落。
+ */
+export function resolveRepoRoot(metaUrl: string = import.meta.url): string | undefined {
+  let configFile: string;
+  try {
+    configFile = realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return undefined;
+  }
+  return findPackageRoot(dirname(configFile));
 }
 
 /**
@@ -159,6 +175,9 @@ export function loadEnvPolicy(
   const rawLogFormat = env.LOG_FORMAT?.trim().toLowerCase() || 'pretty';
   const logFormat: 'pretty' | 'json' = rawLogFormat === 'json' ? 'json' : 'pretty';
 
+  const logOperationsEnabled = parseBoolean(env.LOG_OPERATIONS_ENABLED, false);
+  const logDir = env.LOG_DIR?.trim() || 'data/logs';
+
   return {
     // 这两个标志控制根路径兼容路由是否可用，以及是否允许在首次使用时懒加载默认实例。
     compatModeEnabled: parseBoolean(env.COMPAT_MODE_ENABLED, true),
@@ -171,6 +190,8 @@ export function loadEnvPolicy(
     logLevel,
     logFormat,
     logFile: env.LOG_FILE?.trim() || undefined,
+    logOperationsEnabled,
+    logDir,
     defaultInstanceTemplate,
   };
 }

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest';
 
-import {createLogger} from '../src/server/logger.js';
+import {createLogger, createOperationLogger} from '../src/server/logger.js';
 import type {LogLevel} from '../src/server/types.js';
 
 let tmpDir = '';
@@ -169,5 +169,57 @@ describe('options immutability', () => {
     const logger = createLogger(opts);
     expect(Object.isFrozen(logger.options)).toBe(true);
     expect(logger.options.level).toBe('warn');
+  });
+});
+
+describe('operation logger', () => {
+  test('writes JSON lines when enabled', () => {
+    const logDir = path.join(tmpDir, 'ops');
+    const opLogger = createOperationLogger({enabled: true, logDir, component: 'server'});
+    opLogger.log('instance:start', {instanceId: 'dev'});
+    opLogger.destroy();
+
+    const filePath = path.join(logDir, 'server-operations.log');
+    expect(fs.existsSync(filePath)).toBe(true);
+    const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    const parsed = JSON.parse(lines[0]!);
+    expect(parsed).toMatchObject({component: 'server', operation: 'instance:start', instanceId: 'dev'});
+    expect(typeof parsed.timestamp).toBe('string');
+  });
+
+  test('creates log directory if missing', () => {
+    const logDir = path.join(tmpDir, 'nested', 'ops');
+    const opLogger = createOperationLogger({enabled: true, logDir, component: 'cli'});
+    opLogger.log('cli:command', {command: 'list'});
+    opLogger.destroy();
+
+    expect(fs.existsSync(path.join(logDir, 'cli-operations.log'))).toBe(true);
+  });
+
+  test('is no-op when disabled', () => {
+    const logDir = path.join(tmpDir, 'disabled');
+    const opLogger = createOperationLogger({enabled: false, logDir, component: 'server'});
+    opLogger.log('ignored');
+    opLogger.destroy();
+
+    expect(fs.existsSync(logDir)).toBe(false);
+  });
+
+  test('separates server and cli log files', () => {
+    const logDir = path.join(tmpDir, 'both');
+    const serverLogger = createOperationLogger({enabled: true, logDir, component: 'server'});
+    const cliLogger = createOperationLogger({enabled: true, logDir, component: 'cli'});
+    serverLogger.log('server:start');
+    cliLogger.log('cli:command');
+    serverLogger.destroy();
+    cliLogger.destroy();
+
+    const serverContent = fs.readFileSync(path.join(logDir, 'server-operations.log'), 'utf8');
+    const cliContent = fs.readFileSync(path.join(logDir, 'cli-operations.log'), 'utf8');
+    expect(serverContent).toContain('server:start');
+    expect(cliContent).toContain('cli:command');
+    expect(serverContent).not.toContain('cli:command');
+    expect(cliContent).not.toContain('server:start');
   });
 });

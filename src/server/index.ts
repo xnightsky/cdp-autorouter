@@ -5,16 +5,17 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve} from 'node:path';
 import http from 'node:http';
 import {AddressInfo} from 'node:net';
+import path from 'node:path';
 
 import {WebSocket, WebSocketServer} from 'ws';
 
 import {ChildBrowserSupervisor} from './child-browser-supervisor.js';
-import {loadEnvPolicy} from './config.js';
+import {loadEnvPolicy, resolveRepoRoot} from './config.js';
 import {DefaultInstanceResolver} from './default-instance-resolver.js';
-import {createLogger} from './logger.js';
+import {createLogger, createOperationLogger} from './logger.js';
 import {RouteBindingStore} from './route-bindings.js';
 import {RuntimeRegistry} from './runtime-registry.js';
-import type {Logger, RuntimeInstance} from './types.js';
+import type {Logger, OperationLogger, RuntimeInstance} from './types.js';
 
 import {dispatchHttp} from './routing/dispatch-http.js';
 import {dispatchWs} from './routing/dispatch-ws.js';
@@ -93,6 +94,16 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   const logger = options.logger ?? createLogger({
     level: policy.logLevel, format: policy.logFormat, file: policy.logFile,
   });
+
+  // 操作日志目录解析：相对路径以仓库根为基准，保证无论从哪启动都写到同一处。
+  const repoRoot = resolveRepoRoot();
+  const logDirAbs = path.resolve(repoRoot ?? process.cwd(), policy.logDir);
+  const operationLogger: OperationLogger = createOperationLogger({
+    enabled: policy.logOperationsEnabled,
+    logDir: logDirAbs,
+    component: 'server',
+  });
+
   const registry = new RuntimeRegistry(logger);
   const bindings = new RouteBindingStore(logger);
   const supervisor = new ChildBrowserSupervisor(registry, logger, policy.restartTimeoutMs);
@@ -154,6 +165,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   const ctx: RouteContext = {
     policy,
     logger,
+    operationLogger,
     registry,
     bindings,
     supervisor,
@@ -200,12 +212,15 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   // 4. 将待写入日志刷盘
   const shutdown = async () => {
     logger.info('shutting down');
+    operationLogger.log('server:shutdown:start');
     for (const socket of activeSockets) socket.close();
     await supervisor.shutdown();
     await new Promise<void>((resolve, reject) => {
       server.close(err => (err ? reject(err) : resolve()));
     });
+    operationLogger.log('server:shutdown:complete');
     await logger.destroy();
+    await operationLogger.destroy();
   };
 
   const closeHandler = () => { void shutdown(); };
@@ -224,6 +239,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
     policy,
     registry,
     logger,
+    operationLogger,
   };
 }
 
@@ -261,6 +277,14 @@ if (isMainModule()) {
   const policy = loadEnvPolicy();
   if (forceFlag) await killPortOccupant(policy.serverPort);
   const server = await createAutorouterServer();
+  server.operationLogger.log('server:start:listening', {
+    origin: server.origin,
+    host: server.policy.serverHost,
+    port: server.policy.serverPort,
+    defaultInstanceId: server.policy.defaultInstanceTemplate?.instanceId,
+    compatModeEnabled: server.policy.compatModeEnabled,
+    logOperationsEnabled: server.policy.logOperationsEnabled,
+  });
   server.logger.info(`autorouter listening at ${server.origin}`, {
     host: server.policy.serverHost,
     port: server.policy.serverPort,

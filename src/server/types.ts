@@ -44,6 +44,19 @@ export interface Logger {
 }
 
 /**
+ * 操作日志记录器，用于记录可审计的控制面动作。
+ *
+ * 与诊断日志（{@link Logger}）分离：操作日志面向审计/排障，按组件分文件，
+ * 恒为 JSON 行格式，包含时间戳、组件、动作名及上下文字段。
+ */
+export interface OperationLogger {
+  /** 记录一条操作日志；disabled 时无 I/O 副作用。 */
+  log(operation: string, details?: Record<string, unknown>): void;
+  /** 刷盘并关闭写入器。 */
+  destroy(): Promise<void>;
+}
+
+/**
  * 描述实例如何连接到真实浏览器。
  *
  * - `managed`：autorouter 自己启动并管理浏览器进程生命周期。
@@ -136,6 +149,15 @@ export interface EnvPolicy {
   logLevel: LogLevel;
   logFormat: 'pretty' | 'json';
   logFile?: string;
+  /** 是否启用操作日志（审计/命令追踪）。默认 false，避免测试与静默环境产生文件。 */
+  logOperationsEnabled: boolean;
+  /**
+   * 操作日志目录。
+   *
+   * 相对路径时以仓库根（package.json 所在目录）为基准解析；
+   * 默认值 `data/logs` 与 `.gitignore` 中的 `/data` 规则对应。
+   */
+  logDir: string;
   defaultInstanceTemplate?: Omit<InstanceDefinition, 'source'>;
 }
 

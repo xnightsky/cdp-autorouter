@@ -12,6 +12,7 @@
  */
 
 import os from 'node:os';
+import path from 'node:path';
 
 import {
   resolveEndpoint,
@@ -20,6 +21,9 @@ import {
 } from './resolve-port.js';
 import * as api from './http-client.js';
 import { listSkills, getSkillContent, getAllSkillsContent } from './skills.js';
+import {loadEnvPolicy, resolveRepoRoot} from '../server/config.js';
+import {createOperationLogger} from '../server/logger.js';
+import type {OperationLogger} from '../server/types.js';
 
 // --- argv 解析工具 ---
 
@@ -92,20 +96,34 @@ function printTable(rows: Record<string, unknown>[]): void {
 // --- 主逻辑 ---
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+  // CLI 也复用 .env 的日志配置，确保 server/cli 操作日志写在同一目录下但分文件。
+  const policy = loadEnvPolicy();
+  const repoRoot = resolveRepoRoot();
+  const logDirAbs = path.resolve(repoRoot ?? process.cwd(), policy.logDir);
+  const operationLogger = createOperationLogger({
+    enabled: policy.logOperationsEnabled,
+    logDir: logDirAbs,
+    component: 'cli',
+  });
 
-  // 全局旗标先于命令解析提取：它们允许出现在命令词前面（如 `cli --port 9223 list`），
-  // 若不先摘掉，args.shift() 会把 `--port` 误当成命令词。
-  const portStr = extractFlag(args, '--port');
-  const portFlag = portStr ? parseInt(portStr, 10) : undefined;
-  const jsonMode = hasFlag(args, '--json');
+  let command: string | undefined;
+  let baseUrl: string | undefined;
 
-  const command = args.shift();
+  try {
+    const args = process.argv.slice(2);
 
-  if (!command || command === 'help' || command === '--help' || command === '-h') {
-    printUsage();
-    return;
-  }
+    // 全局旗标先于命令解析提取：它们允许出现在命令词前面（如 `cli --port 9223 list`），
+    // 若不先摘掉，args.shift() 会把 `--port` 误当成命令词。
+    const portStr = extractFlag(args, '--port');
+    const portFlag = portStr ? parseInt(portStr, 10) : undefined;
+    const jsonMode = hasFlag(args, '--json');
+
+    command = args.shift();
+
+    if (!command || command === 'help' || command === '--help' || command === '-h') {
+      printUsage();
+      return;
+    }
 
   // connect/disconnect 是纯本地档案操作（写/删 .autorouter），不发任何网络请求——
   // 所以放在 resolveEndpoint 之前处理，server 没起也能用。
@@ -144,7 +162,10 @@ async function main(): Promise<void> {
 
   // 以下全部命令都要打 autorouter 服务：此刻才解析端点（本地命令不受端口配置影响）
   const endpoint = resolveEndpoint({ portFlag });
-  const baseUrl = endpoint.baseUrl;
+  baseUrl = endpoint.baseUrl;
+
+  // 记录本次 CLI 命令调用；本地命令无 baseUrl。
+  operationLogger.log('cli:command', {command, baseUrl});
 
   switch (command) {
     case 'list': {
@@ -257,6 +278,15 @@ async function main(): Promise<void> {
       printError(`Unknown command: ${command}`);
       printUsage();
       process.exitCode = 1;
+  }
+  } finally {
+    // 在命令处理结束后记录一次结果，包含进程退出码（0 表示成功，非 0 表示失败）。
+    operationLogger.log('cli:result', {
+      command: command ?? 'unknown',
+      baseUrl,
+      exitCode: process.exitCode ?? 0,
+    });
+    await operationLogger.destroy();
   }
 }
 
