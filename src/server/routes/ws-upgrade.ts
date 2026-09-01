@@ -17,6 +17,7 @@ import {WebSocket} from 'ws';
 
 import {compile} from '../routing/pattern.js';
 import type {Route} from '../routing/route.js';
+import {currentTraceId, newTraceId} from '../trace.js';
 
 export function wsUpgradeRoutes(): Route[] {
   return [
@@ -57,7 +58,11 @@ function buildWsRoute(template: string): Route {
       }
 
       ctx.logger.info('ws connection', {instanceId: binding.instanceId, kind, token});
+      // WS upgrade 后的 close/error 事件回调不在 dispatch 的 ALS 异步链内，
+      // 这里在 handler 作用域捕获 traceId，ws:connect/ws:close 审计日志显式携带兜底。
+      const traceId = currentTraceId() ?? newTraceId();
       await ctx.resolveInstance(binding.instanceId, 'ws');
+      ctx.operationLogger.log('ws:connect', {instanceId: binding.instanceId, kind, traceId});
 
       ctx.wsServer.handleUpgrade(req, socket as never, head, clientSocket => {
         // 建立下游连接，开始双向 message pump
@@ -74,6 +79,7 @@ function buildWsRoute(template: string): Route {
           ctx.bindings.delete(token);  // token 一次性回收，不可重用
           if (clientSocket.readyState < WebSocket.CLOSING) clientSocket.close();
           if (downstreamSocket.readyState < WebSocket.CLOSING) downstreamSocket.close();
+          ctx.operationLogger.log('ws:close', {instanceId: binding.instanceId, kind, traceId});
         };
 
         // 客户端 → 下游：保持 binary 标志（修复 git 28b60e0 的 frame type 问题）

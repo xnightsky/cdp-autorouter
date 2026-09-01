@@ -6,7 +6,7 @@ import path from 'node:path';
 import {detectChromePath} from './detect-chrome.js';
 import {fetchJson} from './http-client.js';
 import {RuntimeRegistry} from './runtime-registry.js';
-import type {Logger, RuntimeInstance} from './types.js';
+import type {Logger, OperationLogger, RuntimeInstance} from './types.js';
 
 interface VersionPayload {
   Browser?: string;
@@ -64,6 +64,11 @@ export class ChildBrowserSupervisor {
      * 未传递时走保守默认 15s，保持向后兼容。
      */
     private readonly startTimeoutMs: number = 15_000,
+    /**
+     * 可选审计日志：spawn/dedup/exit 这三个事件是「一次操作起两个浏览器」
+     * 类问题的直接证据链，仅在 server 装配时注入；测试缺省不注入。
+     */
+    private readonly operationLogger?: OperationLogger,
   ) {}
 
   /**
@@ -77,6 +82,8 @@ export class ChildBrowserSupervisor {
     const inflight = this.#inflightStarts.get(instance.instanceId);
     if (inflight) {
       this.logger?.debug('reusing inflight start', {instanceId: instance.instanceId});
+      // 并发去重命中是审计关键：同 traceId 下出现 dedup 而无第二条 spawn = 去重生效
+      this.operationLogger?.log('instance:start:dedup', {instanceId: instance.instanceId});
       return await inflight;
     }
 
@@ -195,6 +202,16 @@ export class ChildBrowserSupervisor {
       lastError: undefined,
     });
 
+    // spawn 审计：一条 spawn 对应一个浏览器进程。同 traceId 出现两条 = 双浏览器实锤
+    this.operationLogger?.log('instance:spawn', {
+      instanceId: instance.instanceId,
+      pid: child.pid,
+      port,
+      userDataDir,
+      executablePath,
+      headless: instance.headless ?? false,
+    });
+
     child.once('exit', (code, signal) => {
       // 区分 deliberate reclaim（预期退出）与 crash。
       const current = this.registry.get(instance.instanceId);
@@ -214,6 +231,14 @@ export class ChildBrowserSupervisor {
       const isReclaiming = current.status === 'reclaiming';
       this.logger?.error('managed browser exited', {
         instanceId: instance.instanceId,
+        code,
+        signal,
+        reclaiming: isReclaiming,
+      });
+      // exit 审计：区分预期回收（reclaiming=true）与意外退出；孤儿进程排查靠它与 spawn 对账
+      this.operationLogger?.log('instance:exit', {
+        instanceId: instance.instanceId,
+        pid: child.pid,
         code,
         signal,
         reclaiming: isReclaiming,

@@ -6,10 +6,18 @@ import * as api from '../src/cli/http-client.js';
 describe('http-client', () => {
   let server: http.Server;
   let baseUrl: string;
+  /** 记录 mock server 最近一次收到的 x-trace-id 头，供注入断言 */
+  let lastSeenTraceId: string | string[] | undefined;
 
   beforeEach(async () => {
+    lastSeenTraceId = undefined;
     server = http.createServer((req, res) => {
       const url = new URL(req.url!, `http://localhost`);
+      // 模拟 server 侧契约：采纳并回显 x-trace-id
+      lastSeenTraceId = req.headers['x-trace-id'];
+      if (typeof lastSeenTraceId === 'string') {
+        res.setHeader('x-trace-id', lastSeenTraceId);
+      }
 
       if (url.pathname === '/api/instances' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -87,5 +95,19 @@ describe('http-client', () => {
     const res = await api.listInstances('http://127.0.0.1:1');
     expect(res.ok).toBe(false);
     expect(res.error).toContain('Connection failed');
+  });
+
+  test('injects x-trace-id header and exposes echoed traceId', async () => {
+    const res = await api.listInstances(baseUrl, 't-cli-1234');
+    expect(res.ok).toBe(true);
+    expect(lastSeenTraceId).toBe('t-cli-1234');
+    expect(res.traceId).toBe('t-cli-1234');
+  });
+
+  test('omits trace header when traceId not provided', async () => {
+    const res = await api.listInstances(baseUrl);
+    expect(res.ok).toBe(true);
+    expect(lastSeenTraceId).toBeUndefined();
+    expect(res.traceId).toBeUndefined();
   });
 });

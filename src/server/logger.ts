@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import {currentTraceId} from './trace.js';
 import type {LogLevel, Logger, LoggerOptions, OperationLogger} from './types.js';
 
 /** 日志级别的数值优先级（越大越详细）。 */
@@ -196,9 +197,14 @@ export function createLogger(options: LoggerOptions): Logger {
   ): void {
     if (!shouldLog(level, targetLevel)) return;
 
+    // 处于请求上下文（dispatch 入口 als.run）时自动附加 traceId；
+    // 调用方显式传的 ctx.traceId 优先（如 WS 事件回调断链后的兜底）。
+    const traceId = currentTraceId();
+    const mergedCtx = traceId === undefined ? ctx : {traceId, ...ctx};
+
     const line = format === 'pretty'
-      ? formatPretty(targetLevel, msg, ctx)
-      : formatJson(targetLevel, msg, ctx);
+      ? formatPretty(targetLevel, msg, mergedCtx)
+      : formatJson(targetLevel, msg, mergedCtx);
 
     // stderr 无缓冲、即时写入；文件走批量缓冲。
     process.stderr.write(line);
@@ -257,6 +263,11 @@ export function createOperationLogger(options: {
       };
       if (details && Object.keys(details).length > 0) {
         Object.assign(payload, details);
+      }
+      // 请求上下文内自动补 traceId；details 里显式携带的优先（WS 事件回调断链兜底）。
+      const traceId = currentTraceId();
+      if (traceId !== undefined && payload.traceId === undefined) {
+        payload.traceId = traceId;
       }
       try {
         fs.appendFileSync(filePath, JSON.stringify(payload) + '\n', 'utf8');

@@ -168,8 +168,20 @@ function instanceActions(): Route {
         return;
       }
       if (method === 'POST' && action === 'start') {
-        ctx.operationLogger.log('instance:start', {instanceId});
-        json(res, 200, ser(await ctx.supervisor.start(ctx.registry.require(instanceId))));
+        // 结果日志带 pid/userDataDir：双浏览器/孤儿 profile 类问题直接可从日志定位。
+        // 失败也落一条（ok:false + error），保证「谁尝试过」可审计。
+        try {
+          const started = await ctx.supervisor.start(ctx.registry.require(instanceId));
+          ctx.operationLogger.log('instance:start', {
+            instanceId, ok: true, status: started.status,
+            pid: started.managedProcessPid, userDataDir: started.userDataDir,
+          });
+          json(res, 200, ser(started));
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.operationLogger.log('instance:start', {instanceId, ok: false, error: msg});
+          throw err;
+        }
         return;
       }
       if (method === 'POST' && action === 'stop') {
@@ -179,10 +191,20 @@ function instanceActions(): Route {
         return;
       }
       if (method === 'POST' && action === 'restart') {
-        ctx.operationLogger.log('instance:restart', {instanceId});
-        await ctx.supervisor.stop(instanceId);
-        const restarted = await ctx.supervisor.start(ctx.registry.require(instanceId));
-        json(res, 200, ser(restarted));
+        // 同 instance:start：结果带 pid/userDataDir，失败落 ok:false
+        try {
+          await ctx.supervisor.stop(instanceId);
+          const restarted = await ctx.supervisor.start(ctx.registry.require(instanceId));
+          ctx.operationLogger.log('instance:restart', {
+            instanceId, ok: true, status: restarted.status,
+            pid: restarted.managedProcessPid, userDataDir: restarted.userDataDir,
+          });
+          json(res, 200, ser(restarted));
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.operationLogger.log('instance:restart', {instanceId, ok: false, error: msg});
+          throw err;
+        }
         return;
       }
       if (method === 'POST' && action === 'refresh') {

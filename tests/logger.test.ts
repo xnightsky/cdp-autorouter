@@ -4,6 +4,7 @@ import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest';
 
 import {createLogger, createOperationLogger} from '../src/server/logger.js';
+import {runWithTraceId} from '../src/server/trace.js';
 import type {LogLevel} from '../src/server/types.js';
 
 let tmpDir = '';
@@ -172,8 +173,7 @@ describe('options immutability', () => {
   });
 });
 
-describe('operation logger', () => {
-  test('writes JSON lines when enabled', () => {
+describe('operation logger', () => {  test('writes JSON lines when enabled', () => {
     const logDir = path.join(tmpDir, 'ops');
     const opLogger = createOperationLogger({enabled: true, logDir, component: 'server'});
     opLogger.log('instance:start', {instanceId: 'dev'});
@@ -221,5 +221,41 @@ describe('operation logger', () => {
     expect(cliContent).toContain('cli:command');
     expect(serverContent).not.toContain('cli:command');
     expect(cliContent).not.toContain('server:start');
+  });
+});
+
+describe('traceId 自动附加（AsyncLocalStorage）', () => {
+  test('logger 在 runWithTraceId 上下文内自动带 traceId，上下文外不带', () => {
+    const logger = createLogger({level: 'info', format: 'json'});
+    logger.info('outside');
+    runWithTraceId('t-ctx-0001', () => {
+      logger.info('inside');
+    });
+    const lines = getStderrLines();
+    expect(JSON.parse(lines[0]!).traceId).toBeUndefined();
+    expect(JSON.parse(lines[1]!).traceId).toBe('t-ctx-0001');
+  });
+
+  test('调用方显式传的 ctx.traceId 优先于上下文值（WS 事件回调兜底场景）', () => {
+    const logger = createLogger({level: 'info', format: 'json'});
+    runWithTraceId('t-ctx-0002', () => {
+      logger.info('explicit wins', {traceId: 't-explicit-0003'});
+    });
+    const lines = getStderrLines();
+    expect(JSON.parse(lines[0]!).traceId).toBe('t-explicit-0003');
+  });
+
+  test('operationLogger 在上下文内自动带 traceId', () => {
+    const logDir = path.join(tmpDir, 'ops-trace');
+    const opLogger = createOperationLogger({enabled: true, logDir, component: 'server'});
+    opLogger.log('no:context');
+    runWithTraceId('t-ctx-0004', () => {
+      opLogger.log('with:context');
+    });
+    opLogger.destroy();
+
+    const lines = fs.readFileSync(path.join(logDir, 'server-operations.log'), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[0]!).traceId).toBeUndefined();
+    expect(JSON.parse(lines[1]!).traceId).toBe('t-ctx-0004');
   });
 });

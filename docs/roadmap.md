@@ -322,6 +322,7 @@ P6-5  CHANGELOG.md
 | D-3 | `uncaughtException` / `unhandledRejection` 回收钩子 | 未注册全局异常处理,进程 crash 时 managed 浏览器可能泄露。与 P2-6 路由层自愈独立:后者仅能在 autorouter 存活时重拉 chrome,autorouter 自身 crash 仍需 D-3 清理那些 chrome 孤儿进程 |
 | D-4 | 缺少真实 chrome-devtools-mcp 集成测试 | 没有自动化脚本验证完整主链 |
 | D-5 | ~~`src/index.ts` 过大~~ | ✅ 已拆分为 `routing/` + `routes/` 子目录，index.ts 退化为 ~250 行 composition root |
+| D-6 | ~~CLI 操作日志不记录实例 id/参数~~ | ✅ 已实现（2026-09-01，traceId 方案一并落地）：`cli:command`/`cli:result` 记录 traceId + 脱敏参数（实例 id 保留，URL 类值打码）；CLI 注入 `x-trace-id` 头与 server 日志串联 |
 
 ## 6. 提交前检查清单(不变)
 

@@ -111,6 +111,9 @@ async function handleSelfHeal(
   ctx.logger.warn('default route lazy-probe detected unreachable upstream', {
     instanceId: instance.instanceId, mode: instance.mode, error: reason,
   });
+  ctx.operationLogger.log('instance:self-heal', {
+    instanceId: instance.instanceId, mode: instance.mode, trigger: 'B', error: reason,
+  });
 
   if (instance.mode === 'attached') {
     // attached 不自愈：标记不健康，返回 503，不擅自启动外部浏览器

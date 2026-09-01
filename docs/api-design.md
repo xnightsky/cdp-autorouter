@@ -22,6 +22,17 @@
    | 根路径 + attached default | 链路通畅 | 触发器 B 检测到上游不可达 | autorouter 自身 bug |
    | 显式路径 `/instances/{id}/json/*` | 链路通畅 | 不使用 | 上游不可达 或 autorouter 自身 bug |
 
+## 可观测性约定
+
+**Trace ID（`x-trace-id`）**：所有 HTTP 请求（兼容接口 + Admin API）遵循同一契约——
+
+1. 调用方可传 `x-trace-id` 请求头；server 做白名单校验（`[A-Za-z0-9._:-]`、≤64 字符，防日志注入），合法则采纳，缺失/非法则自生成 `t-<base36时间>-<4位hex>` 格式 id；
+2. 响应恒回显 `x-trace-id` 头（含错误响应），调用方可直接拿 id 查日志；
+3. 请求处理全程（路由 → resolveInstance → 自愈 → supervisor spawn/kill）的所有诊断日志与操作日志自动附带同一 `traceId` 字段；WS 升级后的事件回调脱离异步上下文，`ws:connect`/`ws:close` 审计日志显式携带兜底；
+4. `cdp-autorouter-cli` 每次调用自生成 traceId 注入请求，并把 id 连同命令、脱敏后的参数（实例 id 保留、URL 类值打码）写入 `cli-operations.log`；`grep <traceId> data/logs/*.log` 可还原「CLI 命令 → server 处理 → 进程生命周期」完整链路。
+
+WS upgrade 路径因握手后无响应头机制，仅通过操作日志（`ws:upgrade`/`ws:connect`/`ws:close`）记录 traceId，不做回显。
+
 ## Admin API
 
 `/api/instances` 系列接口只记录运行时的内存实例，主要职责是创建/更新/查询/控制实例的生命周期，而不做落盘。核心字段包括 `instanceId`、`mode`（`managed`/`attached`）、`status`、`browserUrl`、`wsEndpoint`、`userDataDir`、`managedProcess` 等。

@@ -106,7 +106,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
 
   const registry = new RuntimeRegistry(logger);
   const bindings = new RouteBindingStore(logger);
-  const supervisor = new ChildBrowserSupervisor(registry, logger, policy.restartTimeoutMs);
+  const supervisor = new ChildBrowserSupervisor(registry, logger, policy.restartTimeoutMs, operationLogger);
   const defaultResolver = new DefaultInstanceResolver(policy, registry, logger);
   const wsServer = new WebSocketServer({noServer: true});
   const activeSockets = new Set<WebSocket>();
@@ -136,6 +136,14 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         logger.error('default instance lazy load disabled');
         throw new Error('Default instance lazy load is disabled.');
       }
+      // 懒加载是「静默拉起浏览器」的唯一入口，必须留审计痕迹
+      // （2026-09-01 实例：curl 根路径 → default 弹空白浏览器，日志无任何记录）
+      operationLogger.log('instance:lazy-start', {
+        instanceId: instance.instanceId,
+        method,
+        previousStatus: instance.status,
+        explicit: Boolean(instanceId),
+      });
       instance = await supervisor.start(instance);
     } else if (
       // Trigger A（主动 self-heal）：managed 默认实例非 healthy 时，交 supervisor.start 重拉。
@@ -148,6 +156,12 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
         instanceId: instance.instanceId,
         previousError: instance.lastError,
         previousStatus: instance.status,
+      });
+      operationLogger.log('instance:self-heal', {
+        instanceId: instance.instanceId,
+        trigger: 'A',
+        previousStatus: instance.status,
+        previousError: instance.lastError,
       });
       instance = await supervisor.start(instance);
     } else if (instance.status !== 'healthy') {

@@ -5,7 +5,11 @@
  * - 零第三方依赖，直接用 Node ≥18 内置 fetch —— CLI 要能被 npm 全局装完即用，不背依赖树；
  * - 所有方法**永不 reject**，统一返回结构化 `CliResponse`（ok/status/data/error），
  *   把「HTTP 错误 / 连接失败 / 超时」都收敛成同一形状，让命令层只写一种错误处理。
+ * - 每个请求注入 `x-trace-id` 头（调用方传入），并把 server 回显的 traceId 带回响应，
+ *   供 cli-operations.log 与 server-operations.log 用同一 id 串联（见 src/server/trace.ts）。
  */
+
+import {TRACE_ID_HEADER} from '../server/trace.js';
 
 /** 单次请求超时（毫秒）。server 假死/端口被别的进程占用时，避免 CLI 永久挂起。 */
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -15,6 +19,8 @@ export interface CliResponse<T = unknown> {
   status: number;
   data?: T;
   error?: string;
+  /** server 回显的 traceId（采纳了 CLI 传入值时与传入相同）；连接失败时无此字段。 */
+  traceId?: string;
 }
 
 /**
@@ -30,9 +36,11 @@ async function request<T = unknown>(
   method: string,
   path: string,
   body?: unknown,
+  traceId?: string,
 ): Promise<CliResponse<T>> {
   const url = `${baseUrl}${path}`;
   const headers: Record<string, string> = { 'Accept': 'application/json' };
+  if (traceId) headers[TRACE_ID_HEADER] = traceId;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const init: RequestInit = { method, headers, signal: controller.signal };
@@ -45,6 +53,7 @@ async function request<T = unknown>(
   try {
     const res = await fetch(url, init);
     clearTimeout(timer);
+    const echoedTraceId = res.headers.get(TRACE_ID_HEADER) ?? undefined;
     const text = await res.text();
     let data: T | undefined;
     try { data = JSON.parse(text) as T; } catch { /* 非 JSON 响应（如纯文本错误页）：data 留空，错误信息走下方 text 兜底 */ }
@@ -54,9 +63,9 @@ async function request<T = unknown>(
         ?? (data as Record<string, unknown>)?.message
         ?? text
         ?? `HTTP ${res.status}`;
-      return { ok: false, status: res.status, error: String(errMsg) };
+      return { ok: false, status: res.status, error: String(errMsg), traceId: echoedTraceId };
     }
-    return { ok: true, status: res.status, data };
+    return { ok: true, status: res.status, data, traceId: echoedTraceId };
   } catch (err: unknown) {
     clearTimeout(timer);
     const msg = err instanceof Error ? err.message : String(err);
@@ -69,39 +78,40 @@ async function request<T = unknown>(
 
 // --- 公开 API 方法：与 server 的 /api/instances 系列路由一一对应 ---
 
-export function listInstances(baseUrl: string): Promise<CliResponse> {
-  return request(baseUrl, 'GET', '/api/instances');
+export function listInstances(baseUrl: string, traceId?: string): Promise<CliResponse> {
+  return request(baseUrl, 'GET', '/api/instances', undefined, traceId);
 }
 
 export function createInstance(
   baseUrl: string,
   body: { instanceId: string; mode: string; browserUrl?: string; wsEndpoint?: string },
+  traceId?: string,
 ): Promise<CliResponse> {
-  return request(baseUrl, 'POST', '/api/instances', body);
+  return request(baseUrl, 'POST', '/api/instances', body, traceId);
 }
 
-export function startInstance(baseUrl: string, id: string): Promise<CliResponse> {
-  return request(baseUrl, 'POST', `/api/instances/${encodeURIComponent(id)}/start`);
+export function startInstance(baseUrl: string, id: string, traceId?: string): Promise<CliResponse> {
+  return request(baseUrl, 'POST', `/api/instances/${encodeURIComponent(id)}/start`, undefined, traceId);
 }
 
-export function stopInstance(baseUrl: string, id: string): Promise<CliResponse> {
-  return request(baseUrl, 'POST', `/api/instances/${encodeURIComponent(id)}/stop`);
+export function stopInstance(baseUrl: string, id: string, traceId?: string): Promise<CliResponse> {
+  return request(baseUrl, 'POST', `/api/instances/${encodeURIComponent(id)}/stop`, undefined, traceId);
 }
 
-export function restartInstance(baseUrl: string, id: string): Promise<CliResponse> {
-  return request(baseUrl, 'POST', `/api/instances/${encodeURIComponent(id)}/restart`);
+export function restartInstance(baseUrl: string, id: string, traceId?: string): Promise<CliResponse> {
+  return request(baseUrl, 'POST', `/api/instances/${encodeURIComponent(id)}/restart`, undefined, traceId);
 }
 
-export function switchInstance(baseUrl: string, id: string): Promise<CliResponse> {
-  return request(baseUrl, 'POST', `/api/instances/${encodeURIComponent(id)}/switch`);
+export function switchInstance(baseUrl: string, id: string, traceId?: string): Promise<CliResponse> {
+  return request(baseUrl, 'POST', `/api/instances/${encodeURIComponent(id)}/switch`, undefined, traceId);
 }
 
-export function getInstanceStatus(baseUrl: string, id: string): Promise<CliResponse> {
-  return request(baseUrl, 'GET', `/api/instances/${encodeURIComponent(id)}/status`);
+export function getInstanceStatus(baseUrl: string, id: string, traceId?: string): Promise<CliResponse> {
+  return request(baseUrl, 'GET', `/api/instances/${encodeURIComponent(id)}/status`, undefined, traceId);
 }
 
-export function deleteInstance(baseUrl: string, id: string): Promise<CliResponse> {
-  return request(baseUrl, 'DELETE', `/api/instances/${encodeURIComponent(id)}`);
+export function deleteInstance(baseUrl: string, id: string, traceId?: string): Promise<CliResponse> {
+  return request(baseUrl, 'DELETE', `/api/instances/${encodeURIComponent(id)}`, undefined, traceId);
 }
 
 /**
@@ -112,15 +122,15 @@ export function deleteInstance(baseUrl: string, id: string): Promise<CliResponse
  * 返回的 ws:// 地址指向 **server 的路由端口**（由 server 转发到实例），
  * 所以只要 server 端口可达（含 ssh 转发场景），任何 CDP 客户端都能直接消费。
  */
-export async function getWsEndpoint(baseUrl: string, id?: string): Promise<CliResponse<string>> {
+export async function getWsEndpoint(baseUrl: string, id?: string, traceId?: string): Promise<CliResponse<string>> {
   const path = id
     ? `/instances/${encodeURIComponent(id)}/json/version`
     : '/json/version';
-  const res = await request<{ webSocketDebuggerUrl?: string }>(baseUrl, 'GET', path);
-  if (!res.ok) return { ok: false, status: res.status, error: res.error };
+  const res = await request<{ webSocketDebuggerUrl?: string }>(baseUrl, 'GET', path, undefined, traceId);
+  if (!res.ok) return { ok: false, status: res.status, error: res.error, traceId: res.traceId };
   const wsUrl = res.data?.webSocketDebuggerUrl;
   if (!wsUrl) {
-    return { ok: false, status: res.status, error: 'webSocketDebuggerUrl not found in response' };
+    return { ok: false, status: res.status, error: 'webSocketDebuggerUrl not found in response', traceId: res.traceId };
   }
-  return { ok: true, status: res.status, data: wsUrl };
+  return { ok: true, status: res.status, data: wsUrl, traceId: res.traceId };
 }
