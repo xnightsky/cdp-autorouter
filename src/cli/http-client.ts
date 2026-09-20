@@ -70,7 +70,20 @@ async function request<T = unknown>(
     clearTimeout(timer);
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('abort')) {
-      return { ok: false, status: 0, error: `Request timed out after ${REQUEST_TIMEOUT_MS}ms` };
+      return { ok: false, status: 0, error: `Request timed out after ${REQUEST_TIMEOUT_MS}ms（server 在线但响应过慢：可能在自愈重启实例，或对端假死）` };
+    }
+    // undici 把底层 socket 错误放在 err.cause.code：据此区分「传送带断」（TCP 层失败）
+    // 与「师傅不在」（HTTP 层错误，上面已透传 server 诊断）。
+    // 2026-09-20 事故起点就是裸 "fetch failed" 无法分辨 SSH 转发瞬断与实例故障。
+    const code = (err as {cause?: {code?: string}} | null)?.cause?.code;
+    if (code === 'ECONNREFUSED') {
+      return { ok: false, status: 0, error: `Connection refused: ${baseUrl} 无进程监听——server 未运行，或 SSH 转发已断开（检查 RemoteForward 会话 / server 进程）` };
+    }
+    if (code === 'ECONNRESET' || code === 'EPIPE' || code === 'UND_ERR_SOCKET') {
+      return { ok: false, status: 0, error: `Connection reset: 到 ${baseUrl} 的连接被中断——多为 SSH 转发瞬断或 server 重启，可直接重试` };
+    }
+    if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+      return { ok: false, status: 0, error: `Host unresolvable: ${baseUrl} 主机名解析失败（检查 --port / AUTOROUTER_URL / .autorouter 配置）` };
     }
     return { ok: false, status: 0, error: `Connection failed: ${msg}` };
   }

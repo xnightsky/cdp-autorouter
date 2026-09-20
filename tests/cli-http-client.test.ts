@@ -91,10 +91,21 @@ describe('http-client', () => {
     expect(res.error).toContain('Instance not found');
   });
 
-  test('handles connection refused', async () => {
-    const res = await api.listInstances('http://127.0.0.1:1');
+  test('handles connection refused with SSH-forward hint', async () => {
+    // ECONNREFUSED 必须分流为"传送带断"语义：点名无监听 + SSH 转发排查方向，
+    // 而不是裸 fetch failed（2026-09-20 事故的排查歧义入口）。
+    // 注意不能用 1 这种低位端口——fetch 规范有端口黑名单会提前以 "bad port" 拒绝，
+    // 走不到 TCP 层。正确姿势：拿个临时端口再关掉，制造真实的 ECONNREFUSED。
+    const probe = http.createServer();
+    await new Promise<void>(resolve => probe.listen(0, '127.0.0.1', resolve));
+    const deadPort = (probe.address() as {port: number}).port;
+    await new Promise<void>(resolve => probe.close(() => resolve()));
+
+    const res = await api.listInstances(`http://127.0.0.1:${deadPort}`);
     expect(res.ok).toBe(false);
-    expect(res.error).toContain('Connection failed');
+    expect(res.error).toContain('Connection refused');
+    expect(res.error).toContain('SSH');
+    expect(res.error).not.toContain('fetch failed');
   });
 
   test('injects x-trace-id header and exposes echoed traceId', async () => {
