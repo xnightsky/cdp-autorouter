@@ -187,6 +187,11 @@ export function loadEnvPolicy(
     serverPort: parseNumber(env.SERVER_PORT, 3100),
     // 仅默认实例嗅探自愈使用。默认 8000 ms 覆盖典型 chrome 冷启 1-3s + 留出富余。
     restartTimeoutMs: parseNumber(env.DEFAULT_INSTANCE_RESTART_TIMEOUT_MS, 8000),
+    // server 端低频健康巡检：主动 refresh 所有实例并对 error/unhealthy 的 managed 实例自动恢复。
+    healthMonitorEnabled: parseBoolean(env.HEALTH_MONITOR_ENABLED, true),
+    healthCheckIntervalMs: parseNumber(env.HEALTH_CHECK_INTERVAL_MS, 30_000),
+    healthHealCooldownMs: parseNumber(env.HEALTH_HEAL_COOLDOWN_MS, 60_000),
+    healthHealMaxFailures: parseNumber(env.HEALTH_HEAL_MAX_FAILURES, 5),
     logLevel,
     logFormat,
     logFile: env.LOG_FILE?.trim() || undefined,

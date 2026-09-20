@@ -221,7 +221,18 @@ function instanceActions(): Route {
         return;
       }
       if (method === 'GET' && action === 'health') {
-        const inst = ctx.registry.require(instanceId);
+        let inst = ctx.registry.require(instanceId);
+        // health 的语义是"立刻告诉我活没活"，不能报慢心跳窗口内的缓存状态：
+        // 有探测对象（browserUrl + 可能还活着的状态）时先做一次实时 refresh。
+        // error/stopped/created 无探测对象（进程已不在或从未启动），直接报注册表状态，
+        // 同时保留 lastError 的事故诊断，不被 refresh 失败信息覆盖。
+        // refresh 只探测不拉起（不会 spawn），health 永远无副作用。
+        if (
+          inst.browserUrl &&
+          (inst.status === 'healthy' || inst.status === 'unhealthy' || inst.status === 'starting')
+        ) {
+          inst = await ctx.supervisor.refresh(instanceId);
+        }
         json(res, 200, {
           instanceId: inst.instanceId, status: inst.status,
           lastHeartbeatAt: inst.lastHeartbeatAt, lastError: inst.lastError,

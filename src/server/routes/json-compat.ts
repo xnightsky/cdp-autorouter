@@ -2,11 +2,11 @@
  * Chrome Remote Debugging HTTP 兼容路由：/json/version, /json/list, /json, /json/protocol。
  *
  * 两条路由：
- * - 根路径 `/json/:suffix?`：代表默认实例，享受懒探死与自愈（P2-6）
- * - 显式路径 `/instances/:id/json/:suffix?`：不自愈，开发者手动 restart
+ * - 根路径 `/json/:suffix?`：代表默认实例
+ * - 显式路径 `/instances/:id/json/:suffix?`：代表指定实例
  *
- * 自愈双触发：
- * - Trigger A（主动）：resolveInstance 检测 managed 默认实例非 healthy，交 supervisor.start
+ * 自愈双触发（2026-09-20 起两条路径均享受，attached 仍只诊断不拉起）：
+ * - Trigger A（主动）：resolveInstance 检测 managed 实例非 healthy，交 supervisor.start
  * - Trigger B（被动）：fetch 下游失败时，attached 返 503，managed 重拉一次
  */
 import {compile} from '../routing/pattern.js';
@@ -40,7 +40,7 @@ function toRewriteCtx(ctx: RouteContext): RewriteContext {
 
 /**
  * JSON 兼容路由：根路径 + 显式实例路径。
- * 根路径享受 self-heal，显式路径不享受。
+ * 两条路径均享受 managed self-heal（Trigger A/B）；attached 永不自动拉起，只返 503 诊断。
  */
 export function jsonCompatRoutes(): Route[] {
   return [
@@ -58,8 +58,6 @@ function buildJsonRoute(template: string): Route {
       const host = ctx.resolvePublicHost(req);
       const instanceId = params.instanceId;
       const suffix = params.suffix ? `/json/${params.suffix}` : '/json';
-      // 仅根路径（instanceId === undefined）享受懒探死与自愈
-      const allowSelfHeal = instanceId === undefined;
 
       const fetchAndRespond = async (resolved: RuntimeInstance): Promise<void> => {
         if (!resolved.browserUrl) {
@@ -87,9 +85,7 @@ function buildJsonRoute(template: string): Route {
         await fetchAndRespond(instance);
         return;
       } catch (downstreamError: unknown) {
-        // 显式路径不自愈，直接抛出（走 500）
-        if (!allowSelfHeal) throw downstreamError;
-        // 根路径 Trigger B：下游不可达，进入自愈流程
+        // Trigger B：下游不可达，进入自愈流程（attached 内部走 503 诊断分支，不拉起）
         await handleSelfHeal(ctx, instance, downstreamError, fetchAndRespond);
       }
     },
@@ -108,7 +104,7 @@ async function handleSelfHeal(
   fetchAndRespond: (resolved: RuntimeInstance) => Promise<void>,
 ): Promise<void> {
   const reason = downstreamError instanceof Error ? downstreamError.message : String(downstreamError);
-  ctx.logger.warn('default route lazy-probe detected unreachable upstream', {
+  ctx.logger.warn('lazy-probe detected unreachable upstream', {
     instanceId: instance.instanceId, mode: instance.mode, error: reason,
   });
   ctx.operationLogger.log('instance:self-heal', {
@@ -128,14 +124,14 @@ async function handleSelfHeal(
     healed = await ctx.supervisor.start(ctx.registry.require(instance.instanceId));
   } catch (healError: unknown) {
     const msg = healError instanceof Error ? healError.message : String(healError);
-    ctx.logger.error('default route self-heal failed', {instanceId: instance.instanceId, error: msg});
-    throw new HttpError(503, `default instance self-heal failed: ${msg}`);
+    ctx.logger.error('route self-heal failed', {instanceId: instance.instanceId, error: msg});
+    throw new HttpError(503, `instance '${instance.instanceId}' self-heal failed: ${msg}`);
   }
   try {
     await fetchAndRespond(healed);
   } catch (retryError: unknown) {
     const msg = retryError instanceof Error ? retryError.message : String(retryError);
-    ctx.logger.error('default route retry after self-heal failed', {instanceId: instance.instanceId, error: msg});
-    throw new HttpError(503, `default instance unreachable after self-heal: ${msg}`);
+    ctx.logger.error('route retry after self-heal failed', {instanceId: instance.instanceId, error: msg});
+    throw new HttpError(503, `instance '${instance.instanceId}' unreachable after self-heal: ${msg}`);
   }
 }

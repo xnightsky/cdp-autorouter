@@ -12,6 +12,7 @@ import {WebSocket, WebSocketServer} from 'ws';
 import {ChildBrowserSupervisor} from './child-browser-supervisor.js';
 import {loadEnvPolicy, resolveRepoRoot} from './config.js';
 import {DefaultInstanceResolver} from './default-instance-resolver.js';
+import {HealthMonitor} from './health-monitor.js';
 import {createLogger, createOperationLogger} from './logger.js';
 import {RouteBindingStore} from './route-bindings.js';
 import {RuntimeRegistry} from './runtime-registry.js';
@@ -107,6 +108,18 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   const registry = new RuntimeRegistry(logger);
   const bindings = new RouteBindingStore(logger);
   const supervisor = new ChildBrowserSupervisor(registry, logger, policy.restartTimeoutMs, operationLogger);
+  const healthMonitor = new HealthMonitor(
+    registry,
+    supervisor,
+    {
+      healEnabled: policy.healthMonitorEnabled,
+      intervalMs: policy.healthCheckIntervalMs,
+      healCooldownMs: policy.healthHealCooldownMs,
+      healMaxFailures: policy.healthHealMaxFailures,
+    },
+    logger,
+    operationLogger,
+  );
   const defaultResolver = new DefaultInstanceResolver(policy, registry, logger);
   const wsServer = new WebSocketServer({noServer: true});
   const activeSockets = new Set<WebSocket>();
@@ -146,13 +159,14 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
       });
       instance = await supervisor.start(instance);
     } else if (
-      // Trigger A（主动 self-heal）：managed 默认实例非 healthy 时，交 supervisor.start 重拉。
+      // Trigger A（主动 self-heal）：managed 实例非 healthy 时，交 supervisor.start 重拉。
+      // 2026-09-20 起覆盖显式实例（原仅默认实例）：用户关掉浏览器后 CLI 下一场景
+      // 立刻请求会撞上巡检空窗，请求路径即时自愈消除这个失败窗口。
       // inflight dedup 在 supervisor 内部处理，并发请求不会重复 spawn。
       instance.status !== 'healthy' &&
-      instance.mode === 'managed' &&
-      !instanceId
+      instance.mode === 'managed'
     ) {
-      logger.info('default instance self-heal triggered', {
+      logger.info('managed instance self-heal triggered', {
         instanceId: instance.instanceId,
         previousError: instance.lastError,
         previousStatus: instance.status,
@@ -219,7 +233,13 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   const address = server.address() as AddressInfo;
   const origin = `http://${address.address}:${address.port}`;
 
+  // 低频健康巡检：listen 成功后启动，主动探测实例健康并自动恢复意外死亡的 managed 实例。
+  if (policy.healthMonitorEnabled) {
+    healthMonitor.start();
+  }
+
   // --- 关闭路径：顺序很重要 ---
+  // 0. 先停健康巡检，避免巡检与回收竞争（tick 中的 start 撞上 shutdown 的 stop）
   // 1. 关闭活跃 WS socket，让客户端收到干净断开
   // 2. 回收 managed 浏览器进程
   // 3. 停止接受新的 HTTP 连接
@@ -227,6 +247,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   const shutdown = async () => {
     logger.info('shutting down');
     operationLogger.log('server:shutdown:start');
+    healthMonitor.stop();
     for (const socket of activeSockets) socket.close();
     await supervisor.shutdown();
     await new Promise<void>((resolve, reject) => {

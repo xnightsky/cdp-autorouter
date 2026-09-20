@@ -146,6 +146,14 @@ export interface EnvPolicy {
    * 超时后 HTTP 返回 503，默认 8000 ms。
    */
   restartTimeoutMs: number;
+  /** 是否启用 server 端低频健康巡检（HealthMonitor）。默认 true。 */
+  healthMonitorEnabled: boolean;
+  /** 巡检周期（毫秒）。默认 30000，低频即可，巡检只做 refresh/自愈判断，代价低。 */
+  healthCheckIntervalMs: number;
+  /** 同一实例两次自动恢复尝试的最小间隔（毫秒），防止下游不可恢复时反复 spawn。 */
+  healthHealCooldownMs: number;
+  /** 同一实例连续自愈失败次数上限，达到后熔断，等人工干预或实例状态被外部改变。 */
+  healthHealMaxFailures: number;
   logLevel: LogLevel;
   logFormat: 'pretty' | 'json';
   logFile?: string;

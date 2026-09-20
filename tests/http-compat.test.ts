@@ -467,9 +467,9 @@ describe('HTTP compat proxy', () => {
     expect(payload.error).toMatch(/attached upstream unreachable/);
   });
 
-  // P2-6: 显式实例路径 不享受探死与自愈：attached 外部不可达仍应返 500，
-  // 要求开发者允诸手动 restart。锁住路径范围语义不被意外扩展。
-  test('explicit instance route does not self-heal: attached unreachable returns 500', async () => {
+  // 2026-09-20 起显式路径也享受自愈：attached 外部不可达返 503 诊断（永不擅自拉起外部浏览器），
+  // managed 意外死亡则请求路径即时重拉（与 server 端巡检互补，消除巡检空窗期的请求失败）。
+  test('explicit instance route: attached unreachable returns 503 with diagnostics', async () => {
     chrome = await startMockChromeServer();
 
     autorouter = await createAutorouterServer({
@@ -497,9 +497,104 @@ describe('HTTP compat proxy', () => {
     chrome = undefined;
 
     const dead = await fetch(`${autorouter.origin}/instances/alpha/json/version`);
-    // 显式路径不自愈：fetch 错误不被包为 HttpError(503)，走兑底 catch 返回 500。
-    expect(dead.status).toBe(500);
+    // attached 不自愈：与根路径一致的 503 诊断语义
+    expect(dead.status).toBe(503);
+    const payload = (await dead.json()) as {error: string};
+    expect(payload.error).toMatch(/attached upstream unreachable/);
   });
+
+  // GET /api/instances/:id/health 是"立刻告诉我活没活"的接口：
+  // 上游关闭后必须当场探死，不能报巡检慢心跳窗口内的缓存状态。
+  test('instance health action probes liveness on demand', async () => {
+    chrome = await startMockChromeServer();
+
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        // 巡检关掉，证明探测来自请求路径而非后台周期
+        HEALTH_MONITOR_ENABLED: 'false',
+      },
+      logger: createSilentLogger(),
+    });
+
+    const create = await fetch(`${autorouter.origin}/api/instances`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({instanceId: 'alpha', mode: 'attached', browserUrl: chrome.origin}),
+    });
+    expect(create.status).toBe(201);
+
+    // 先让实例进入 healthy（显式请求触发首次探测）
+    expect((await fetch(`${autorouter.origin}/instances/alpha/json/version`)).status).toBe(200);
+
+    const alive = await fetch(`${autorouter.origin}/api/instances/alpha/health`);
+    expect((await alive.json() as {status: string}).status).toBe('healthy');
+
+    await chrome.close();
+    chrome = undefined;
+
+    // 巡检已禁用，health 必须靠请求侧实时探测当场报 unhealthy
+    const dead = await fetch(`${autorouter.origin}/api/instances/alpha/health`);
+    const payload = (await dead.json()) as {status: string; lastError?: string};
+    expect(payload.status).toBe('unhealthy');
+    expect(payload.lastError).toBeTruthy();
+  });
+  // 显式 managed 实例子进程被外部 kill 后，下次显式路径请求应即时自愈 → 200，
+  // 且 PID 实际换代。覆盖"用户关掉浏览器 → CLI 下一场景立刻请求"的实战场景。
+  test('explicit managed instance self-heals on request after child process is killed', async () => {
+    autorouter = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+      },
+      logger: createSilentLogger(),
+    });
+
+    const create = await fetch(`${autorouter.origin}/api/instances`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({
+        instanceId: 'alpha',
+        mode: 'managed',
+        executablePath: process.execPath,
+        chromeLaunchArgs: ['tests/fixtures/mock-managed-browser.cjs'],
+      }),
+    });
+    expect(create.status).toBe(201);
+
+    // 首次显式请求 → lazy-start → 200
+    const first = await fetch(`${autorouter.origin}/instances/alpha/json/version`);
+    expect(first.status).toBe(200);
+
+    const before = (await (await fetch(`${autorouter.origin}/api/instances`)).json()) as Array<{
+      instanceId: string;
+      managedProcessPid: number;
+    }>;
+    const oldPid = before.find(i => i.instanceId === 'alpha')!.managedProcessPid;
+    expect(typeof oldPid).toBe('number');
+
+    process.kill(oldPid, 'SIGKILL');
+    // 给 exit handler 一个 tick，让它将 status 打为 error
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // 下次显式请求 → Trigger A 自愈 → 200，PID 换代
+    const healed = await fetch(`${autorouter.origin}/instances/alpha/json/version`);
+    expect(healed.status).toBe(200);
+
+    const after = (await (await fetch(`${autorouter.origin}/api/instances`)).json()) as Array<{
+      instanceId: string;
+      managedProcessPid: number;
+      status: string;
+    }>;
+    const entry = after.find(i => i.instanceId === 'alpha')!;
+    expect(entry.status).toBe('healthy');
+    expect(entry.managedProcessPid).not.toBe(oldPid);
+  }, 20_000);
 
   // P2-6: managed default 子进程被外部 kill 后，下次根路径请求应自愈 → 200，
   // 且 PID 实际发生了变化（证明真的 spawn 了新进程）。
