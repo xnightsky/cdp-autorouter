@@ -289,6 +289,54 @@ export class ChildBrowserSupervisor {
   }
 
   /**
+   * 崩溃路径的同步 best-effort 清理：把还活着的 managed 子进程全部 SIGKILL。
+   *
+   * 供 uncaughtException/unhandledRejection 钩子调用——进程马上要死，
+   * 没有任何异步余地（await 回收在崩溃上下文里不可靠），只能同步发信号。
+   * 不清理 userDataDir（文件系统操作是异步的），残留目录有界且位于 .tmp 下。
+   *
+   * 覆盖边界：只对 JS 层崩溃有效。SIGKILL/taskkill /F/OOM/断电时钩子根本不执行，
+   * 那种场景的孤儿进程不在本方法职责内（见 roadmap D-3 的说明）。
+   */
+  killManagedChildrenSync(reason: string): void {
+    const victims = this.registry
+      .list()
+      .filter(i => i.mode === 'managed' && i.managedProcess && i.managedProcess.exitCode === null);
+    if (victims.length === 0) {
+      return;
+    }
+    this.logger?.error('killing managed children before process death', {
+      reason,
+      count: victims.length,
+    });
+    for (const instance of victims) {
+      const pid = instance.managedProcessPid;
+      try {
+        instance.managedProcess!.kill('SIGKILL');
+        // 崩溃清理是孤儿对账的关键证据：正常路径 spawn/exit 成对，崩溃路径靠这条补账
+        this.operationLogger?.log('instance:fatal-kill', {
+          instanceId: instance.instanceId,
+          pid,
+          reason,
+        });
+      } catch (error: unknown) {
+        // 进程可能刚好已退出：崩溃路径不放大错误，记日志继续清理其余实例
+        this.logger?.warn('fatal kill failed', {
+          instanceId: instance.instanceId,
+          pid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      this.registry.update(instance.instanceId, {
+        status: 'error',
+        lastError: `Killed during fatal process cleanup (${reason}).`,
+        managedProcess: undefined,
+        managedProcessPid: undefined,
+      });
+    }
+  }
+
+  /**
    * 停止单个实例，必要时回收其拥有的资源。
    */
   async stop(instanceId: string): Promise<void> {

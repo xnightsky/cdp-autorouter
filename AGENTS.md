@@ -140,7 +140,6 @@ npm run build
 
 - `extensions` 占位返回
 - `wsEndpoint-only` 健康检查/metadata 刷新未补齐
-- 未接 `uncaughtException`/`unhandledRejection` 回收钩子
 - 无真实 chrome-devtools-mcp 集成脚本
 
 补能力时先保持已有测试通过，再新增覆盖。

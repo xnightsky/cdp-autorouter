@@ -263,12 +263,32 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   process.once('SIGTERM', closeHandler);
   process.once('beforeExit', closeHandler);
 
+  // 致命异常兜底（roadmap D-3）：JS 层崩溃时同步杀掉 managed 浏览器，避免变孤儿。
+  // uncaughtException 后进程状态不可信，清理完必须 exit；
+  // unhandledRejection 在本服务里视同致命（拒绝默许吞掉 bug）。
+  // 注意边界：SIGKILL/taskkill /F/OOM 时钩子不执行，那类孤儿只能靠有头窗口人工发现。
+  const fatalHandler = (error: unknown, origin: string) => {
+    const msg = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    logger.error('fatal error, reclaiming managed browsers before exit', {origin, error: msg});
+    operationLogger.log('process:fatal', {origin, error: msg});
+    supervisor.killManagedChildrenSync(`process:${origin}`);
+    // 审计日志刷盘是异步的，崩溃路径不保证落盘——这是已知取舍， stdout/stderr
+    // 的诊断日志（pino 同步写）才是崩溃现场的主要证据。
+    process.exit(1);
+  };
+  const onUncaughtException = (error: unknown) => fatalHandler(error, 'uncaughtException');
+  const onUnhandledRejection = (reason: unknown) => fatalHandler(reason, 'unhandledRejection');
+  process.on('uncaughtException', onUncaughtException);
+  process.on('unhandledRejection', onUnhandledRejection);
+
   return {
     origin,
     close: async () => {
       process.removeListener('SIGINT', closeHandler);
       process.removeListener('SIGTERM', closeHandler);
       process.removeListener('beforeExit', closeHandler);
+      process.removeListener('uncaughtException', onUncaughtException);
+      process.removeListener('unhandledRejection', onUnhandledRejection);
       await shutdown();
     },
     policy,

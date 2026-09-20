@@ -4,6 +4,7 @@ import path from 'node:path';
 import {afterEach, describe, expect, test} from 'vitest';
 
 import {ChildBrowserSupervisor} from '../src/server/child-browser-supervisor.js';
+import {createAutorouterServer} from '../src/server/index.js';
 import {RuntimeRegistry} from '../src/server/runtime-registry.js';
 import {createSilentLogger} from './helpers/mock-logger.js';
 
@@ -73,5 +74,58 @@ describe('ChildBrowserSupervisor.start L2 stale-process safety', () => {
       // 收拾新启动的进程
       await supervisor.stop(created.instanceId);
     }
+  }, 20_000);
+});
+
+describe('ChildBrowserSupervisor.killManagedChildrenSync（进程级崩溃兜底，D-3）', () => {
+  // 崩溃钩子没有异步余地：同步 SIGKILL 还活着的 managed 子进程，防孤儿。
+  test('kills live managed children synchronously and marks them error', async () => {
+    const registry = new RuntimeRegistry();
+    const supervisor = new ChildBrowserSupervisor(registry, createSilentLogger(), 5_000);
+
+    const created = registry.create({
+      instanceId: 'crash-victim',
+      source: 'api-runtime',
+      mode: 'managed',
+      executablePath: process.execPath,
+      chromeLaunchArgs: [MOCK_MANAGED],
+    });
+    const started = await supervisor.start(registry.require(created.instanceId));
+    const pid = started.managedProcessPid!;
+    const child = started.managedProcess!;
+    const exited = new Promise<boolean>(resolve => child.once('exit', () => resolve(true)));
+
+    supervisor.killManagedChildrenSync('process:uncaughtException');
+
+    // 同步路径：调用返回时信号已发出；exit 事件确认死亡事实
+    expect(await Promise.race([
+      exited,
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 3_000)),
+    ])).toBe(true);
+    const after = registry.require(created.instanceId);
+    expect(after.status).toBe('error');
+    expect(after.lastError).toContain('fatal process cleanup');
+    expect(after.managedProcessPid).toBeUndefined();
+    expect(pid).toBeGreaterThan(0);
+  }, 20_000);
+});
+
+describe('fatal hooks 注册与清理', () => {
+  // createAutorouterServer 注册 uncaughtException/unhandledRejection 钩子，
+  // close() 必须移除——否则测试间/多 server 场景监听器累积。
+  test('server registers fatal hooks on create and removes them on close', async () => {
+    const beforeUncaught = process.listenerCount('uncaughtException');
+    const beforeRejection = process.listenerCount('unhandledRejection');
+
+    const server = await createAutorouterServer({
+      env: {SERVER_HOST: '127.0.0.1', SERVER_PORT: '0'},
+      logger: createSilentLogger(),
+    });
+    expect(process.listenerCount('uncaughtException')).toBe(beforeUncaught + 1);
+    expect(process.listenerCount('unhandledRejection')).toBe(beforeRejection + 1);
+
+    await server.close();
+    expect(process.listenerCount('uncaughtException')).toBe(beforeUncaught);
+    expect(process.listenerCount('unhandledRejection')).toBe(beforeRejection);
   }, 20_000);
 });
