@@ -90,7 +90,7 @@ flowchart TD
 - **触发器 A（主动，在 `resolveInstance` 中）**：请求到达时实例 status 已不是 healthy（例如 managed 子进程上一次退出后留下 `error/stopped/unhealthy`）。`error` `starting` `unhealthy` `stopped` `created` 全部交给 `supervisor.start()`，其内部 inflight Promise 去重保证并发请求只 spawn 一次。
 - **触发器 B（被动兜底，在 compat handler 的 catch 中）**：`resolveInstance` 返回 healthy 但下游 fetch 仍失败（典型场景：attached 上游被外部关闭，autorouter 没有进程权限发现）。managed 走 retry-after-self-heal，attached 返 503 诊断。
 
-两个触发器都仅作用于**默认实例 + 根路径**（`instanceId === undefined`）；显式路径不享受。
+两个触发器作用于**所有 managed 实例的请求路径**（根路径 + 显式实例路径，2026-09-20 起由"仅默认实例"推广）；attached 实例在任何路径上都不被自动拉起，仅由触发器 B 返回 503 诊断。懒加载语义（§5.1 实例不存在时按 `.env` 模板注入内存）仍只属于默认实例。
 
 ### 5.1 首次懒加载（默认实例不存在）
 
@@ -123,7 +123,7 @@ sequenceDiagram
     H-->>M: 200 + autorouter metadata
 ```
 
-### 5.2 路由层自愈（仅根路径 + 默认实例）
+### 5.2 路由层自愈（根路径 + 显式实例路径的 managed 实例）
 
 描述两个触发器的中间状态与退出路径。主动触发（A）走上半分支，被动兜底（B）走下半分支。
 
@@ -169,9 +169,9 @@ sequenceDiagram
 
 ### 5.3 路径范围语义
 
-- 本节所有自愈语义仅适用于**默认实例与根路径兼容路由**
-- 显式路径 `/instances/{id}/json/*` 不享受探死与自愈，表现与 v1 原设计一致（开发者手动 `POST /api/instances/{id}/restart`）
-- 不偏业务路由，不偏 admin API；边界在代码上以 `instanceId === undefined` 判别
+- 自愈语义适用于**所有 managed 实例的请求路径**（根路径 + 显式实例路径 `/instances/{id}/json/*`，2026-09-20 起）
+- attached 实例在两条路径上都不自愈：上游不可达统一返 503 诊断，不擅自启动外部浏览器
+- 不偏业务路由，不偏 admin API；懒加载（实例不存在时按模板注入）仍以 `instanceId === undefined` 判别，只属于默认实例
 
 ```
 
@@ -182,12 +182,12 @@ sequenceDiagram
 - 若默认实例不存在，则按 `.env` 模板注入内存
 - 首次 `created` 状态走 §5.1 懒启动路径
 - 运行期上游 chrome 不可达时走 §5.2：不同模式与检测点包括两个触发器
-  - 触发器 A（主动）：managed default 崩溃后 exit handler 将 status 打为 `error` → 下次请求 resolveInstance 检测到不是 healthy → 交 supervisor.start 重拉
-  - 触发器 B（被动兜底）：attached default 上游被外部关闭后 status 仍为 healthy——autorouter 没有进程权限发现——需 fetch 失败后才发现，在 catch 里返 503 诊断
+  - 触发器 A（主动）：managed 实例崩溃后 exit handler 将 status 打为 `error` → 下次请求 resolveInstance 检测到不是 healthy → 交 supervisor.start 重拉
+  - 触发器 B（被动兜底）：attached 上游被外部关闭后 status 仍为 healthy——autorouter 没有进程权限发现——需 fetch 失败后才发现，在 catch 里返 503 诊断
   - managed 实例双触发器都能自愈；attached 实例只有触发器 B 返回 503，从不擅自启动外部 chrome
 - 同一实例并发自愈通过 inflight Promise 去重，不会因突发流量 spawn 多个进程
 - 启动超时由 `DEFAULT_INSTANCE_RESTART_TIMEOUT_MS` 控制，超时返回 503
-- 显式实例路径 `/instances/{id}/json/*` 不享受任一触发器，开发者需手动 `POST /api/instances/{id}/restart`
+- 显式实例路径同样享受两个触发器（2026-09-20 起）；`POST /api/instances/{id}/restart` 仍是可用的手动恢复手段，但不再是唯一途径
 
 ## 6. 配置模型
 
@@ -252,9 +252,9 @@ DEFAULT_INSTANCE_REMOTE_DEBUGGING_PORT=
 - `source`: `env-bootstrap` | `api-runtime`
 - `mode`: `managed` | `attached`
 - `status`: `created` | `starting` | `healthy` | `unhealthy` | `stopping` | `reclaiming` | `stopped` | `error`
-  - 默认实例上 `error` 不是终态：意外退出会被记录为 `error` + `lastError` 以保留诊断信息，但下一次根路径请求（仅默认实例 + 根路径路由）会触发路由层自愈重启（参见 §9.2 触发器 A）
-  - 实际上默认路径上 managed 实例的任何非 healthy 状态（含 `error/starting/unhealthy/stopped/created`）都会被触发器 A 纳入自愈
-  - 显式实例路径上 `error` 仍为终态，需调 `POST /api/instances/{id}/restart` 手动恢复
+  - managed 实例上 `error` 不是终态：意外退出会被记录为 `error` + `lastError` 以保留诊断信息，下一次请求（根路径或显式实例路径）会触发路由层自愈重启（参见 §9.2 触发器 A）；server 端低频巡检（§9.4）也会在无请求时自动恢复
+  - managed 实例的任何非 healthy 状态（含 `error/starting/unhealthy/stopped/created`）都会被触发器 A 纳入自愈
+  - attached 实例的 `error/unhealthy` 仍为终态：只在请求时返 503 诊断，永不自动拉起
 - `browserUrl`
 - `wsEndpoint`
 - `version`
@@ -355,15 +355,15 @@ clientSocket.on('message', (data, isBinary) => {
 - `attached`
   - autorouter 只接入已有浏览器，不创建外部进程
 
-### 9.2 默认实例路由层自愈（Self-heal on Default Route）
+### 9.2 路由层自愈（Self-heal on Request Route）
 
-**适用范围：仅限默认实例 + 根路径兼容路由**（`/json/version` `/json/list` `/json` `/json/protocol`）。显式实例路径 `/instances/{id}/json/*` 不享受自愈，失败返回 `500`——开发者已明确指定 id，应手动调用 `POST /api/instances/{id}/restart`。
+**适用范围：所有 managed 实例的请求路径**——根路径（`/json/version` `/json/list` `/json` `/json/protocol`）与显式实例路径（`/instances/{id}/json/*`），2026-09-20 起由"仅默认实例"推广（动机：用户关闭浏览器后，远端 CLI 下一场景的首次请求必须当场恢复，不能等巡检或人工 restart）。attached 实例在任何路径上都不自愈，上游不可达返 `503` 诊断。
 
 #### 双触发器架构
 
 | 触发器 | 检测点 | 触发条件 | 典型场景 |
 |---------|--------|---------|----------|
-| **A（主动）** | `resolveInstance` | managed default 的 status 不是 `healthy` | managed 子进程崩溃后 exit handler 将 status 打为 `error` |
+| **A（主动）** | `resolveInstance` | managed 实例的 status 不是 `healthy` | managed 子进程崩溃后 exit handler 将 status 打为 `error` |
 | **B（被动兜底）** | compat handler 的 catch | resolveInstance 返回 healthy 但 fetch 下游失败 | attached 上游被外部关闭，autorouter 无进程权限发现 |
 
 两个触发器互补：
@@ -372,7 +372,7 @@ clientSocket.on('message', (data, isBinary) => {
 
 #### 触发器 A：resolveInstance 主动自愈
 
-`resolveInstance` 在默认路径上检测到 managed default 的 status 不是 `healthy` 时，直接交给 `supervisor.start()`。包括以下所有状态：
+`resolveInstance` 在请求路径上检测到 managed 实例的 status 不是 `healthy` 时，直接交给 `supervisor.start()`。包括以下所有状态：
 
 - `error`：上一次意外退出
 - `starting`：某个并发请求已在重拉中，本请求 await 同一 inflight Promise
@@ -380,7 +380,7 @@ clientSocket.on('message', (data, isBinary) => {
 - `stopped`：被 admin API 停止后再次访问
 - `created`：首次懒加载
 
-这样做的好处：不管实例处于什么中间状态，默认路径的请求永远能拿到“端口可用”的结果（或超时 503），不会卡在中间状态上反复 refresh 失败。
+这样做的好处：不管实例处于什么中间状态，请求永远能拿到“端口可用”的结果（或超时 503），不会卡在中间状态上反复 refresh 失败。
 
 #### 触发器 B：compat handler catch 被动兜底
 
@@ -417,7 +417,7 @@ GET /json/* (默认实例路径):
 
 #### 与显式路径的边界
 
-显式实例路径仍走原有 `resolveInstance` 逻辑：非 healthy 走 refresh，refresh 失败 throw 500。不跳过这个边界、不隐式帮开发者描实例。
+2026-09-20 起显式实例路径与根路径共享同一套双触发器自愈，不再设"显式路径返 500 等人工 restart"的边界。保留的边界只剩模式维度：attached 永不自动拉起（503 诊断），managed 才允许 supervisor.start 重拉。
 
 ### 9.3 统一回收
 
@@ -439,10 +439,11 @@ GET /json/* (默认实例路径):
 - 进程退出
 - 致命异常退出前的统一清理钩子
 
-意外退出（非 reclaiming）只会标记 `error`，不删除注册表记录。后续恢复路径按是否默认实例分两路：
+意外退出（非 reclaiming）只会标记 `error`，不删除注册表记录。后续恢复路径有三条（按响应速度排序）：
 
-- 默认实例 + 根路径请求 → 下一次请求触发 §9.2 触发器 A 主动自愈（resolveInstance 检测到非 healthy 即交 supervisor.start）
-- 显式实例路径请求 → 保持 500，开发者需手动 `POST /api/instances/{id}/restart`。
+- 任意请求路径（根/显式）→ 下一次请求触发 §9.2 触发器 A 主动自愈（resolveInstance 检测到非 healthy 即交 supervisor.start）
+- server 端低频巡检（§9.4）→ 无请求时也自动恢复，周期 ≤ `HEALTH_CHECK_INTERVAL_MS`
+- 手动 `POST /api/instances/{id}/restart` → 仍可用，但已非必需
 
 回收顺序：
 
@@ -452,6 +453,21 @@ GET /json/* (默认实例路径):
 4. 尝试优雅关闭浏览器
 5. 超时后强制 kill 子进程
 6. 清理端口、进程句柄、临时目录和状态
+
+### 9.4 server 端低频健康巡检（HealthMonitor）
+
+2026-09-20 新增（案例见 `docs/notes/case/2026-09-20-managed-exit-and-ssh-flap.md`）。请求路径自愈（§9.2）只在"有请求时"生效；巡检把"发现 + 恢复"闭环补到"无请求时"，并替代请求时懒标记的主动健康探测。
+
+行为契约：
+
+- 每个周期（`HEALTH_CHECK_INTERVAL_MS`，默认 30s）对所有实例主动 `refresh()`：`healthy` 的维持心跳，探测失败的落 `unhealthy`
+- `error`/`unhealthy` 的 **managed** 实例自动 `supervisor.start()` 恢复；`created`/`stopped` 不拉起（不替用户做启动决定）；`starting`/`reclaiming` 跳过
+- **attached 只探测，永不拉起/杀外部浏览器**——回收边界与请求路径一致
+- 防护：同一实例两次恢复尝试间隔 ≥ `HEALTH_HEAL_COOLDOWN_MS`（默认 60s）；连续失败 ≥ `HEALTH_HEAL_MAX_FAILURES`（默认 5 次）后熔断，等人工或状态变化；tick 防重入
+- 与请求路径自愈的竞态由 supervisor inflight Promise 去重吸收（同实例并发 start 只 spawn 一次）
+- 总开关 `HEALTH_MONITOR_ENABLED`（默认 true）；shutdown 时先于实例回收停止，避免巡检与回收竞争
+- 审计：`instance:heal-attempt` / `instance:heal-success` / `instance:heal-failed` 写入操作日志，可与 `instance:spawn`/`instance:exit` 对账
+- **巡检不替代请求侧探测**：`GET /api/instances`（响应前实时 refresh）、`POST /api/instances/{id}/refresh`、`GET /api/instances/{id}/health`（实时探测，无副作用不拉起）、`/json/*` 下游 fetch、WS 拨号，都是慢心跳窗口内"立刻定位活没活"的按需探针；`GET /api/instances/{id}/status` 保持纯缓存语义（看板轮询零开销）
 
 ## 10. 实现优先级
 

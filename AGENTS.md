@@ -83,6 +83,7 @@
 | `src/server/runtime-registry.ts` | 内存实例注册表 |
 | `src/server/default-instance-resolver.ts` | 根路径默认实例解析与懒注入 |
 | `src/server/child-browser-supervisor.ts` | managed/attached 启动、刷新、停止、回收 |
+| `src/server/health-monitor.ts` | 低频巡检：主动 refresh 全实例 + error/unhealthy managed 自动恢复（冷却+熔断） |
 | `src/server/route-bindings.ts` | 外部 WS token → 下游真实 WS 映射 |
 | `src/server/routing/pattern.ts` | 路径模板编译与匹配（`:name` / `:name?` / `*`） |
 | `src/server/routing/route.ts` | Route/RouteContext/HttpError 类型定义 |
@@ -90,7 +91,7 @@
 | `src/server/routing/dispatch-ws.ts` | WS upgrade 分派 |
 | `src/server/routes/capabilities.ts` | GET /api/capabilities |
 | `src/server/routes/admin-instances.ts` | /api/instances CRUD + 生命周期 action |
-| `src/server/routes/json-compat.ts` | /json/* 兼容层 + 默认路径 self-heal |
+| `src/server/routes/json-compat.ts` | /json/* 兼容层 + 请求路径 managed self-heal（根/显式路径） |
 | `src/server/routes/devtools-proxy.ts` | /devtools/* 透明 HTTP 反代 |
 | `src/server/routes/ws-upgrade.ts` | WS CDP 双向 proxy（token 校验 + message pump） |
 | `src/server/routes/rewriters.ts` | webSocketDebuggerUrl / devtoolsFrontendUrl 改写 |

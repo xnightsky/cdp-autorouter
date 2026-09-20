@@ -41,7 +41,8 @@
 | 28 | `POST /api/instances/{id}/restart` | ✅ 已实现(P2-4) | stop → start 组合重启,保留配置刷新进程 |
 | 29 | 实例连接元数据 | ✅ 已实现(P2-5) | 每个实例响应附带 `instanceVersionUrl` + `browserWebSocketDebuggerUrl`,基于请求 host 动态构建 |
 | 30 | MCP 启动参数自动升级 | ✅ 已实现(P3-1) | `resolveChromeDevToolsMcpLaunchArgs()` 导出函数;browserUrl→wsEndpoint 自动解析;超时控制 + graceful fallback |
-| 31 | 默认实例路由层自愈(Self-heal on Default Route) | ✅ 已实现(P2-6) | **仅默认实例 + 根路径路由**:双触发器架构——触发器 A(`resolveInstance` 检测 managed default 非 healthy 主动交 supervisor.start) + 触发器 B(fetch 失败 catch 兜底,attached 返 503,managed retry);supervisor.start() 入口 L2 进程残留兜底;inflight Promise 去重;`DEFAULT_INSTANCE_RESTART_TIMEOUT_MS`(默认 8000ms)控制超时;显式实例路径不享受自愈 |
+| 31 | 请求路径自愈(Self-heal on Request Route) | ✅ 已实现(P2-6；2026-09-20 推广到显式实例路径) | **所有 managed 实例的请求路径（根 + 显式）**:双触发器架构——触发器 A(`resolveInstance` 检测 managed 实例非 healthy 主动交 supervisor.start) + 触发器 B(fetch 失败 catch 兜底,attached 返 503,managed retry);supervisor.start() 入口 L2 进程残留兜底;inflight Promise 去重;`DEFAULT_INSTANCE_RESTART_TIMEOUT_MS`(默认 8000ms)控制超时;attached 永不自动拉起 |
+| 32 | server 端低频健康巡检(HealthMonitor) | ✅ 已实现(2026-09-20) | 周期主动 refresh 全实例(替代请求时懒标记);error/unhealthy managed 自动恢复;created/stopped 不拉起;冷却+熔断防重启风暴;tick 防重入;`HEALTH_MONITOR_ENABLED`/`HEALTH_CHECK_INTERVAL_MS`/`HEALTH_HEAL_COOLDOWN_MS`/`HEALTH_HEAL_MAX_FAILURES` 可配 |
 
 ## 2. 待实现清单
 
@@ -83,7 +84,7 @@
 | P2-3 | **POST /api/instances/{id}/switch** | 切换默认实例(仅限 running 实例) | ✅ **已实现**:仅 healthy 实例可切换;`currentDefaultInstanceId` 运行时可变;`isDefault` 标记联动 |
 | P2-4 | **POST /api/instances/{id}/restart** | 同 ID 重启实例(保留 port/userDataDir) | ✅ **已实现**:stop → start 组合流程,保留配置刷新进程 |
 | P2-5 | **实例连接元数据** | `instanceVersionUrl` + `browserWebSocketDebuggerUrl` 稳定对外暴露 | ✅ **已实现**:每次响应附带,URL 基于请求 host 动态构建,支持反代 |
-| P2-6 | **默认路径路由层自愈** | 无对照(对照 repo 仅靠手动 restart API) | ✅ **已实现**:**仅作用于默认实例 + 根路径路由**;双触发器架构——触发器 A(`resolveInstance` 主动检测 managed default 非 healthy) + 触发器 B(fetch 失败 catch 兜底);`supervisor.start()` 入口 L2 进程残留兜底(kill 旧句柄 + 清死运行时痕迹);inflight 去重;启动超时可配置 |
+| P2-6 | **请求路径自愈** | 无对照(对照 repo 仅靠手动 restart API) | ✅ **已实现**:**作用于所有 managed 实例的请求路径（2026-09-20 由"仅默认实例+根路径"推广）**;双触发器架构——触发器 A(`resolveInstance` 主动检测 managed 非 healthy) + 触发器 B(fetch 失败 catch 兜底);`supervisor.start()` 入口 L2 进程残留兜底(kill 旧句柄 + 清死运行时痕迹);inflight 去重;启动超时可配置;attached 永不自动拉起 |
 
 ### P3 - MCP 集成(对标对照 repo 的 mcp-launch-options.js + CLI MCP wrapper)
 
@@ -201,7 +202,7 @@ cdp-autorouter-cli --port 9300 list
 | P5-3 | **健康检查端点** | `GET /health` 返回 autorouter 自身健康状态(不依赖 Chrome),供负载均衡/监控使用 |
 | P5-4 | **Prometheus metrics**(可选) | 暴露 `GET /metrics`:instance_count、ws_connections_active、request_duration_seconds、managed_process_count 等 |
 | P5-5 | **实例事件 hook** | 实例状态变更时 emit 事件(starting → healthy → stopped),支持外部监听;可用于通知系统或自动告警 |
-| ~~P5-6~~ | ~~**主动健康巡检(Watchdog)**~~ | **已取消**:与“稳定性”性价比不划算。周期调 `refresh()` 需处理巡检间隔/抖动/重启风暴，并与 P2-6 请求路径自愈产生竞态（同一实例双套 starting）；ROI 低于 P2-6。没有请求时实例是不是 healthy 不影响业务；一旦有请求，请求本身就是最准的探针。 |
+| P5-6 | **主动健康巡检(Watchdog / HealthMonitor)** | ✅ **已实现(2026-09-20，原"已取消"决议翻案)**。翻案理由：2026-09-20 事故（`docs/notes/case/2026-09-20-managed-exit-and-ssh-flap.md`）证明原前提"没有请求时实例是不是 healthy 不影响业务"在远端托管场景不成立——实例多因用户关窗意外死亡，而远端没有本机人工可 restart；取消时担心的竞态由 supervisor inflight Promise 去重吸收（巡检 start 与请求路径 start 同实例只 spawn 一次），重启风暴由冷却（`HEALTH_HEAL_COOLDOWN_MS`）+ 连续失败熔断（`HEALTH_HEAL_MAX_FAILURES`）防护。行为契约见架构文档 §9.4。 |
 
 ### P6 - 开发体验(让贡献者更容易上手)
 
