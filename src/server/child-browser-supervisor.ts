@@ -229,23 +229,37 @@ export class ChildBrowserSupervisor {
         return;
       }
       const isReclaiming = current.status === 'reclaiming';
-      this.logger?.error('managed browser exited', {
+      // 优雅退出（exit code 0 且无信号）视为用户故意关闭（典型：手动关窗），语义等价于 stop：
+      // 落 stopped 而非 error，健康巡检不拉起，下次业务请求走 resolveInstance 懒启动。
+      // 崩溃 / SSH 断连（SIGHUP）/ 外部 kill 的退出码非 0 或带 signal，仍落 error 由巡检自愈，
+      // 2026-09-20 事故场景不回退。
+      const isGracefulExit = !isReclaiming && code === 0 && signal === null;
+      // 预期退出（回收 reclaiming / 故意关窗 graceful）是正常生命周期事件，info 即可；
+      // 只有意外退出才升 error，避免告警流被用户主动操作淹没。
+      const exitLog = {
         instanceId: instance.instanceId,
         code,
         signal,
         reclaiming: isReclaiming,
-      });
-      // exit 审计：区分预期回收（reclaiming=true）与意外退出；孤儿进程排查靠它与 spawn 对账
+        graceful: isGracefulExit,
+      };
+      if (isReclaiming || isGracefulExit) {
+        this.logger?.info('managed browser exited', exitLog);
+      } else {
+        this.logger?.error('managed browser exited', exitLog);
+      }
+      // exit 审计：区分预期回收（reclaiming）/ 故意关闭（graceful）/ 意外退出；孤儿进程排查靠它与 spawn 对账
       this.operationLogger?.log('instance:exit', {
         instanceId: instance.instanceId,
         pid: child.pid,
         code,
         signal,
         reclaiming: isReclaiming,
+        graceful: isGracefulExit,
       });
       this.registry.update(instance.instanceId, {
-        status: isReclaiming ? 'stopped' : 'error',
-        lastError: isReclaiming
+        status: isReclaiming || isGracefulExit ? 'stopped' : 'error',
+        lastError: isReclaiming || isGracefulExit
           ? undefined
           : `Managed browser exited unexpectedly (code=${code}, signal=${signal}).`,
         managedProcess: undefined,

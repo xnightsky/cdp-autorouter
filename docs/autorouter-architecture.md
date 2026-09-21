@@ -252,7 +252,8 @@ DEFAULT_INSTANCE_REMOTE_DEBUGGING_PORT=
 - `source`: `env-bootstrap` | `api-runtime`
 - `mode`: `managed` | `attached`
 - `status`: `created` | `starting` | `healthy` | `unhealthy` | `stopping` | `reclaiming` | `stopped` | `error`
-  - managed 实例上 `error` 不是终态：意外退出会被记录为 `error` + `lastError` 以保留诊断信息，下一次请求（根路径或显式实例路径）会触发路由层自愈重启（参见 §9.2 触发器 A）；server 端低频巡检（§9.4）也会在无请求时自动恢复
+  - managed 实例上 `error` 不是终态：意外退出（非 0 退出码或信号）会被记录为 `error` + `lastError` 以保留诊断信息，下一次请求（根路径或显式实例路径）会触发路由层自愈重启（参见 §9.2 触发器 A）；server 端低频巡检（§9.4）也会在无请求时自动恢复
+  - managed 子进程优雅退出（exit code 0，典型为用户手动关窗）落 `stopped` 而非 `error`：视为用户故意停止，巡检不拉起，下次请求懒启动
   - managed 实例的任何非 healthy 状态（含 `error/starting/unhealthy/stopped/created`）都会被触发器 A 纳入自愈
   - attached 实例的 `error/unhealthy` 仍为终态：只在请求时返 503 诊断，永不自动拉起
 - `browserUrl`
@@ -462,6 +463,7 @@ GET /json/* (默认实例路径):
 
 - 每个周期（`HEALTH_CHECK_INTERVAL_MS`，默认 30s）对所有实例主动 `refresh()`：`healthy` 的维持心跳，探测失败的落 `unhealthy`
 - `error`/`unhealthy` 的 **managed** 实例自动 `supervisor.start()` 恢复；`created`/`stopped` 不拉起（不替用户做启动决定）；`starting`/`reclaiming` 跳过
+- 退出码分流：managed 子进程优雅退出（exit code 0 且无信号，典型为用户手动关窗）由 exit handler 落 `stopped` 而非 `error`——视为用户故意停止，巡检不拉起，下次业务请求走 §9.2 触发器 A 懒启动；非 0 退出 / 信号（崩溃、SSH 断连 SIGHUP、外部 kill）仍落 `error` 由巡检自愈
 - **attached 只探测，永不拉起/杀外部浏览器**——回收边界与请求路径一致
 - 防护：同一实例两次恢复尝试间隔 ≥ `HEALTH_HEAL_COOLDOWN_MS`（默认 60s）；连续失败 ≥ `HEALTH_HEAL_MAX_FAILURES`（默认 5 次）后熔断，等人工或状态变化；tick 防重入
 - 与请求路径自愈的竞态由 supervisor inflight Promise 去重吸收（同实例并发 start 只 spawn 一次）

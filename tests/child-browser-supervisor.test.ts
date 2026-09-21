@@ -77,6 +77,52 @@ describe('ChildBrowserSupervisor.start L2 stale-process safety', () => {
   }, 20_000);
 });
 
+describe('ChildBrowserSupervisor exit handler 退出码分流', () => {
+  // 用户手动关窗是"故意停止"而非事故：落 stopped，健康巡检不拉起，
+  // 下次业务请求由 resolveInstance 懒启动。崩溃/外部 kill 仍落 error 交给巡检自愈。
+  async function startMockManaged(instanceId: string) {
+    const registry = new RuntimeRegistry();
+    const supervisor = new ChildBrowserSupervisor(registry, createSilentLogger(), 5_000);
+    const created = registry.create({
+      instanceId,
+      source: 'api-runtime',
+      mode: 'managed',
+      executablePath: process.execPath,
+      chromeLaunchArgs: [MOCK_MANAGED],
+    });
+    const started = await supervisor.start(registry.require(created.instanceId));
+    const exited = new Promise<void>(resolve => started.managedProcess!.once('exit', () => resolve()));
+    return {registry, supervisor, started, exited};
+  }
+
+  test('优雅退出（code 0）标记 stopped 而非 error', async () => {
+    const {registry, started, exited} = await startMockManaged('graceful-close');
+
+    await fetch(`${started.browserUrl}/simulate-exit?code=0`);
+    await exited;
+    // exit handler 同步更新注册表，让出一个事件循环即可读到结果
+    await new Promise(resolve => setImmediate(resolve));
+
+    const after = registry.require(started.instanceId);
+    expect(after.status).toBe('stopped');
+    expect(after.lastError).toBeUndefined();
+    expect(after.managedProcessPid).toBeUndefined();
+  }, 20_000);
+
+  test('非 0 退出（崩溃）仍标记 error，保留巡检自愈语义', async () => {
+    const {registry, started, exited} = await startMockManaged('crash-exit');
+
+    await fetch(`${started.browserUrl}/simulate-exit?code=1`);
+    await exited;
+    await new Promise(resolve => setImmediate(resolve));
+
+    const after = registry.require(started.instanceId);
+    expect(after.status).toBe('error');
+    expect(after.lastError).toContain('exited unexpectedly');
+    expect(after.managedProcessPid).toBeUndefined();
+  }, 20_000);
+});
+
 describe('ChildBrowserSupervisor.killManagedChildrenSync（进程级崩溃兜底，D-3）', () => {
   // 崩溃钩子没有异步余地：同步 SIGKILL 还活着的 managed 子进程，防孤儿。
   test('kills live managed children synchronously and marks them error', async () => {

@@ -28,8 +28,12 @@ interface HealState {
  * server 端低频健康巡检。
  *
  * 设计动机（2026-09-20 事故，见 docs/notes/case/2026-09-20-managed-exit-and-ssh-flap.md）：
- * managed 浏览器被外部因素（关窗/会话事件）杀死后，实例只剩 error/unhealthy 残留，
+ * managed 浏览器被外部因素（崩溃/SSH 会话断开/外部 kill）杀死后，实例只剩 error/unhealthy 残留，
  * 既无主动探测也无自动恢复，远端客户端只能等人工 up。本巡检把"发现 + 恢复"闭环收到 server 端：
+ *
+ * 注意退出码分流（child-browser-supervisor exit handler）：优雅退出（code 0 无信号，典型为用户
+ * 手动关窗）落 `stopped` 而非 `error`——视为用户故意停止，本巡检不拉起，等下次业务请求懒启动；
+ * 只有非 0 退出 / 信号类意外死亡才落 `error` 进入下面的自愈路径。
  *
  * - 每个 tick 对所有实例做 refresh（主动探测，替代请求时懒标记）。
  * - 对 error/unhealthy 的 **managed** 实例尝试 supervisor.start 自动恢复。

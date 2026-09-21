@@ -35,6 +35,17 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 测试专用出口：模拟浏览器进程退出。?code=N 控制退出码——
+  // code=0 模拟用户手动关窗（优雅退出），非 0 模拟崩溃。
+  // 跨平台可靠：Windows 上 child.kill 信号处理器不会执行，无法用信号模拟。
+  if (req.url && req.url.startsWith('/simulate-exit')) {
+    const code = Number(new URL(req.url, 'http://127.0.0.1').searchParams.get('code') ?? '0');
+    res.writeHead(200);
+    res.end();
+    setImmediate(() => process.exit(code));
+    return;
+  }
+
   res.writeHead(404);
   res.end();
 });
