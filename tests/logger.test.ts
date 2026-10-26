@@ -206,6 +206,46 @@ describe('operation logger', () => {  test('writes JSON lines when enabled', () 
     expect(fs.existsSync(logDir)).toBe(false);
   });
 
+  test('rotates operation logs without losing the previous generation', () => {
+    const logDir = path.join(tmpDir, 'ops-rotate');
+    const opLogger = createOperationLogger({
+      enabled: true,
+      logDir,
+      component: 'server',
+      maxSize: 250,
+      maxFiles: 2,
+    });
+    opLogger.log('first', {instanceId: 'dev'});
+    opLogger.log('second', {instanceId: 'dev'});
+    opLogger.log('third', {instanceId: 'dev'});
+
+    const current = fs.readFileSync(path.join(logDir, 'server-operations.log'), 'utf8');
+    const previous = fs.readFileSync(path.join(logDir, 'server-operations.1.log'), 'utf8');
+    expect(current).toContain('third');
+    expect(previous).toContain('first');
+    expect(previous).toContain('second');
+  });
+
+  test('operation log retention and rotation are isolated by component', () => {
+    const logDir = path.join(tmpDir, 'ops-retention');
+    const serverLogger = createOperationLogger({
+      enabled: true,
+      logDir,
+      component: 'server',
+      maxSize: 200,
+      maxFiles: 1,
+    });
+    const cliLogger = createOperationLogger({enabled: true, logDir, component: 'cli'});
+    for (let i = 0; i < 6; i++) serverLogger.log('rotate', {index: i});
+    cliLogger.log('cli:command', {command: 'list'});
+
+    expect(fs.readFileSync(path.join(logDir, 'server-operations.log'), 'utf8')).toContain('"index":5');
+    expect(fs.existsSync(path.join(logDir, 'server-operations.1.log'))).toBe(true);
+    expect(fs.existsSync(path.join(logDir, 'server-operations.2.log'))).toBe(false);
+    expect(fs.readFileSync(path.join(logDir, 'cli-operations.log'), 'utf8')).toContain('cli:command');
+    expect(fs.existsSync(path.join(logDir, 'cli-operations.1.log'))).toBe(false);
+  });
+
   test('separates server and cli log files', () => {
     const logDir = path.join(tmpDir, 'both');
     const serverLogger = createOperationLogger({enabled: true, logDir, component: 'server'});

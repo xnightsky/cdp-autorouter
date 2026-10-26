@@ -235,14 +235,17 @@ function ensureDir(dir: string): void {
  * - 输出文件固定为 `{logDir}/{component}-operations.log`；
  * - 格式固定为单行 JSON，便于日志聚合与审计；
  * - disabled 时所有方法均为空操作，不产生文件 I/O；
- * - 写入同步但无缓冲（操作日志量小，且需要在崩溃前立即落盘）。
+ * - 写入同步但无缓冲（操作日志量小，且需要在崩溃前立即落盘）；
+ * - 默认按 10 MB / 3 个备份轮转，避免长期运行时审计日志无限增长。
  *
- * @param options - 启用开关、目录、组件名（server/cli）。
+ * @param options - 启用开关、目录、组件名（server/cli）及可选轮转阈值。
  */
 export function createOperationLogger(options: {
   enabled: boolean;
   logDir: string;
   component: 'server' | 'cli';
+  maxSize?: number;
+  maxFiles?: number;
 }): OperationLogger {
   if (!options.enabled) {
     return {
@@ -253,6 +256,8 @@ export function createOperationLogger(options: {
 
   ensureDir(options.logDir);
   const filePath = path.join(options.logDir, `${options.component}-operations.log`);
+  const maxSize = options.maxSize ?? 10 * 1024 * 1024;
+  const maxFiles = options.maxFiles ?? 3;
 
   return {
     log(operation, details) {
@@ -270,7 +275,14 @@ export function createOperationLogger(options: {
         payload.traceId = traceId;
       }
       try {
-        fs.appendFileSync(filePath, JSON.stringify(payload) + '\n', 'utf8');
+        const line = JSON.stringify(payload) + '\n';
+        if (fs.existsSync(filePath)) {
+          const stats = fs.statSync(filePath);
+          if (stats.size + Buffer.byteLength(line, 'utf8') > maxSize) {
+            rotateLogFile(filePath, maxFiles);
+          }
+        }
+        fs.appendFileSync(filePath, line, 'utf8');
       } catch (err: unknown) {
         // 操作日志写入失败不应阻断业务；降级到 stderr 并附带原始错误信息。
         const message = err instanceof Error ? err.message : String(err);
