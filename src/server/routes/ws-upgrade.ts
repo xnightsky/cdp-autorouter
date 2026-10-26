@@ -72,9 +72,12 @@ function buildWsRoute(template: string): Route {
         // 下游未 ready 时缓冲客户端消息，等 open 后 flush
         const pendingMessages: {data: Buffer; binary: boolean}[] = [];
 
-        // 一次性清理：回收 token、关闭双端 socket。
+        // 一次性清理：回收 token、关闭双端 socket，并保留唯一一条关闭审计。
         // 4 个 close + 4 个 error 监听都指向同一个 dispose，多次调用幂等。
+        let disposed = false;
         const dispose = () => {
+          if (disposed) return;
+          disposed = true;
           ctx.activeSockets.delete(clientSocket);
           ctx.bindings.delete(token);  // token 一次性回收，不可重用
           if (clientSocket.readyState < WebSocket.CLOSING) clientSocket.close();

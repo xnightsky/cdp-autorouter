@@ -193,6 +193,45 @@ describe('HTTP compat proxy', () => {
     expect(message).toBe('echo:ping');
   });
 
+  test('双端关闭同一 WS 代理时保留一条 ws:close 审计', async () => {
+    chrome = await startMockChromeServer();
+    const server = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'default',
+        DEFAULT_INSTANCE_MODE: 'attached',
+        DEFAULT_INSTANCE_BROWSER_URL: chrome.origin,
+      },
+      logger: createSilentLogger(),
+    });
+    autorouter = server;
+
+    const closeLogs: Record<string, unknown>[] = [];
+    const originalLog = server.operationLogger.log.bind(server.operationLogger);
+    server.operationLogger.log = (operation, details) => {
+      if (operation === 'ws:close') closeLogs.push(details ?? {});
+      originalLog(operation, details);
+    };
+
+    const versionResponse = await fetch(`${server.origin}/json/version`);
+    const versionPayload = (await versionResponse.json()) as {webSocketDebuggerUrl: string};
+    const socket = new WebSocket(versionPayload.webSocketDebuggerUrl);
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', resolve);
+      socket.once('error', reject);
+    });
+    const closed = new Promise<void>(resolve => socket.once('close', () => resolve()));
+    socket.close();
+    await closed;
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(closeLogs).toHaveLength(1);
+    expect(closeLogs[0]).toMatchObject({instanceId: 'default', kind: 'browser'});
+  });
+
   // managed 实例必须能被按需回收，防止服务留下自己启动的浏览器子进程。
   test('reclaims managed browser processes through Admin API', async () => {
     autorouter = await createAutorouterServer({
