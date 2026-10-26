@@ -6,13 +6,14 @@
  * （十来个动词 + 两个全局旗标），不值得引 commander/yargs 这类解析库。
  *
  * 命令分三类：
- * - 纯本地：connect / disconnect（读写 .autorouter 档案）、skills（读包内文档）——不碰网络；
+ * - 纯本地：connect / disconnect（读写 .autorouter 档案）、skills（读包内文档）、--version——不碰网络；
  * - 控制面：list / create / start / stop / restart / switch / status / delete —— 打 Admin API；
  * - 消费口：get-ws —— 打 CDP 兼容路由，输出单行 ws:// 供 $() 内联消费。
  */
 
 import os from 'node:os';
 import path from 'node:path';
+import {createRequire} from 'node:module';
 
 import {
   resolveEndpoint,
@@ -187,12 +188,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 以下全部命令都要打 autorouter 服务：此刻才解析端点（本地命令不受端口配置影响）
+  // version 只读包元数据，其余命令打 autorouter 服务；端点解析本身不访问网络。
   const endpoint = resolveEndpoint({ portFlag });
   baseUrl = endpoint.baseUrl;
 
-  // 记录本次 CLI 命令调用；本地命令无 baseUrl。args 脱敏后入日志（实例 id 保留，URL 类值脱敏）。
+  // version 也走统一审计入口，保持修复前的 command/result 日志完整性。
   operationLogger.log('cli:command', {command, baseUrl, traceId, args: sanitizeArgs(args)});
+
+  if (command === '--version') {
+    const require = createRequire(import.meta.url);
+    const packageJson = require(path.resolve(repoRoot ?? process.cwd(), 'package.json')) as {version: string};
+    process.stdout.write(`${packageJson.version}\n`);
+    return;
+  }
 
   switch (command) {
     case 'list': {
@@ -372,6 +380,7 @@ function printUsage(): void {
 Usage: cdp-autorouter-cli [--port <port>] [--json] <command> [args]
 
 Commands:
+  --version            Output package version
   connect [port]       Save port to ./.autorouter (default: 3100)
   connect [port] --global   Save to ~/.autorouter (machine-wide fallback)
   disconnect           Remove nearest .autorouter (falls back to ~/.autorouter)

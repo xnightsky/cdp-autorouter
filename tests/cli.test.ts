@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -142,5 +143,52 @@ describe('resolve-port', () => {
       expect(result.port).toBe(3100);
       expect(result.baseUrl).toBe('http://127.0.0.1:3100');
     });
+  });
+});
+
+describe('CLI 本地命令', () => {
+  test('--version 输出包版本并以 0 退出', () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.resolve('package.json'), 'utf8'),
+    ) as { version: string };
+    const result = spawnSync(process.execPath, [
+      '--import',
+      'tsx',
+      path.resolve('src/cli/autorouter-cli.ts'),
+      '--version',
+    ], {
+      env: { ...process.env, LOG_OPERATIONS_ENABLED: 'false' },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(`${packageJson.version}\n`);
+    expect(result.stderr).toBe('');
+  });
+
+  test('--version 保留 command 和 result 操作日志', () => {
+    const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-version-log-'));
+    try {
+      const result = spawnSync(process.execPath, [
+        '--import',
+        'tsx',
+        path.resolve('src/cli/autorouter-cli.ts'),
+        '--version',
+      ], {
+        env: { ...process.env, LOG_OPERATIONS_ENABLED: 'true', LOG_DIR: logDir },
+        encoding: 'utf8',
+      });
+      const entries = fs.readFileSync(path.join(logDir, 'cli-operations.log'), 'utf8')
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as { operation: string; command: string; exitCode?: number });
+
+      expect(result.status).toBe(0);
+      expect(entries.map(entry => entry.operation)).toEqual(['cli:command', 'cli:result']);
+      expect(entries.every(entry => entry.command === '--version')).toBe(true);
+      expect(entries[1]?.exitCode).toBe(0);
+    } finally {
+      fs.rmSync(logDir, { recursive: true, force: true });
+    }
   });
 });
