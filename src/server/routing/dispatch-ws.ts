@@ -44,6 +44,7 @@ export async function dispatchWs(
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.logger.error('ws upgrade error', {error: message});
+      ctx.operationLogger.log('ws:reject', {reason: 'upgrade_failed', path, error: message});
       socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
       socket.destroy();
     }

@@ -46,12 +46,19 @@ function buildWsRoute(template: string): Route {
       const binding = ctx.bindings.get(token);
       if (!binding || binding.kind !== kind) {
         ctx.logger.warn('ws token not found', {token, kind});
+        ctx.operationLogger.log('ws:reject', {reason: 'invalid_token', kind});
         socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
         socket.destroy();
         return;
       }
       if (rawInstanceId && rawInstanceId !== binding.instanceId) {
         ctx.logger.warn('ws instance mismatch', {expected: binding.instanceId, received: rawInstanceId});
+        ctx.operationLogger.log('ws:reject', {
+          reason: 'instance_mismatch',
+          kind,
+          expectedInstanceId: binding.instanceId,
+          receivedInstanceId: rawInstanceId,
+        });
         socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
         socket.destroy();
         return;

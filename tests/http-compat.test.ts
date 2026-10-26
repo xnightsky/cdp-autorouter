@@ -5,6 +5,26 @@ import {startMockChromeServer, type MockChromeServer} from './helpers/mockChrome
 import {createSilentLogger} from './helpers/mock-logger.js';
 import {createAutorouterServer} from '../src/server/index.js';
 
+type AutorouterServer = Awaited<ReturnType<typeof createAutorouterServer>>;
+
+function captureOperations(server: AutorouterServer) {
+  const entries: {operation: string; details?: Record<string, unknown>}[] = [];
+  const originalLog = server.operationLogger.log.bind(server.operationLogger);
+  server.operationLogger.log = (operation, details) => {
+    entries.push({operation, details});
+    originalLog(operation, details);
+  };
+  return entries;
+}
+
+async function expectWsUpgradeFailure(url: string, status: number) {
+  const error = await new Promise<Error>(resolve => {
+    const socket = new WebSocket(url);
+    socket.once('error', resolve);
+  });
+  expect(error.message).toContain(`Unexpected server response: ${status}`);
+}
+
 describe('HTTP compat proxy', () => {
   let chrome: MockChromeServer | undefined;
   let autorouter:
@@ -230,6 +250,79 @@ describe('HTTP compat proxy', () => {
 
     expect(closeLogs).toHaveLength(1);
     expect(closeLogs[0]).toMatchObject({instanceId: 'default', kind: 'browser'});
+  });
+
+  test('无效 WS token 返回 404 并记录拒绝原因', async () => {
+    const server = await createAutorouterServer({
+      env: {SERVER_HOST: '127.0.0.1', SERVER_PORT: '0'},
+      logger: createSilentLogger(),
+    });
+    autorouter = server;
+    const logs = captureOperations(server);
+
+    await expectWsUpgradeFailure(`${server.origin.replace('http', 'ws')}/devtools/browser/missing`, 404);
+
+    expect(logs.map(entry => entry.operation)).toEqual(['ws:upgrade', 'ws:reject']);
+    expect(logs[1]?.details).toMatchObject({reason: 'invalid_token', kind: 'browser'});
+  });
+
+  test('WS 实例不匹配返回 404 并记录双方实例 ID', async () => {
+    chrome = await startMockChromeServer();
+    const server = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'default',
+        DEFAULT_INSTANCE_MODE: 'attached',
+        DEFAULT_INSTANCE_BROWSER_URL: chrome.origin,
+      },
+      logger: createSilentLogger(),
+    });
+    autorouter = server;
+    const versionResponse = await fetch(`${server.origin}/json/version`);
+    const versionPayload = (await versionResponse.json()) as {webSocketDebuggerUrl: string};
+    const mismatchedUrl = new URL(versionPayload.webSocketDebuggerUrl);
+    mismatchedUrl.pathname = mismatchedUrl.pathname.replace('/devtools/', '/instances/other/devtools/');
+    const logs = captureOperations(server);
+
+    await expectWsUpgradeFailure(mismatchedUrl.toString(), 404);
+
+    expect(logs.map(entry => entry.operation)).toEqual(['ws:upgrade', 'ws:reject']);
+    expect(logs[1]?.details).toMatchObject({
+      reason: 'instance_mismatch',
+      expectedInstanceId: 'default',
+      receivedInstanceId: 'other',
+    });
+  });
+
+  test('WS 实例解析失败返回 500 并记录错误', async () => {
+    chrome = await startMockChromeServer();
+    const server = await createAutorouterServer({
+      env: {
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: '0',
+        COMPAT_MODE_ENABLED: 'true',
+        COMPAT_LAZY_LOAD_ENABLED: 'true',
+        DEFAULT_INSTANCE_ID: 'default',
+        DEFAULT_INSTANCE_MODE: 'attached',
+        DEFAULT_INSTANCE_BROWSER_URL: chrome.origin,
+      },
+      logger: createSilentLogger(),
+    });
+    autorouter = server;
+    const versionResponse = await fetch(`${server.origin}/json/version`);
+    const versionPayload = (await versionResponse.json()) as {webSocketDebuggerUrl: string};
+    await chrome.close();
+    chrome = undefined;
+    server.registry.update('default', {status: 'unhealthy'});
+    const logs = captureOperations(server);
+
+    await expectWsUpgradeFailure(versionPayload.webSocketDebuggerUrl, 500);
+
+    expect(logs.map(entry => entry.operation)).toEqual(['ws:upgrade', 'ws:reject']);
+    expect(logs[1]?.details).toMatchObject({reason: 'upgrade_failed', error: expect.any(String)});
   });
 
   // managed 实例必须能被按需回收，防止服务留下自己启动的浏览器子进程。
