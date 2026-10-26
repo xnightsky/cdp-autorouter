@@ -174,4 +174,14 @@ describe('fatal hooks 注册与清理', () => {
     expect(process.listenerCount('uncaughtException')).toBe(beforeUncaught);
     expect(process.listenerCount('unhandledRejection')).toBe(beforeRejection);
   }, 20_000);
+
+  test('server close 并发或重复调用时共享同一次 shutdown', async () => {
+    const server = await createAutorouterServer({
+      env: {SERVER_HOST: '127.0.0.1', SERVER_PORT: '0'},
+      logger: createSilentLogger(),
+    });
+
+    await expect(Promise.all([server.close(), server.close()])).resolves.toEqual([undefined, undefined]);
+    await expect(server.close()).resolves.toBeUndefined();
+  }, 20_000);
 });

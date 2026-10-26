@@ -244,7 +244,7 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
   // 2. 回收 managed 浏览器进程
   // 3. 停止接受新的 HTTP 连接
   // 4. 将待写入日志刷盘
-  const shutdown = async () => {
+  const performShutdown = async () => {
     logger.info('shutting down');
     operationLogger.log('server:shutdown:start');
     healthMonitor.stop();
@@ -256,6 +256,13 @@ export async function createAutorouterServer(options: CreateServerOptions = {}) 
     operationLogger.log('server:shutdown:complete');
     await logger.destroy();
     await operationLogger.destroy();
+  };
+
+  // 信号钩子与 beforeExit 可能连续触发；所有调用共享同一 promise，避免重复回收和重复 close server。
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = () => {
+    shutdownPromise ??= performShutdown();
+    return shutdownPromise;
   };
 
   const closeHandler = () => { void shutdown(); };
