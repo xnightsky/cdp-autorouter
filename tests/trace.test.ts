@@ -114,5 +114,37 @@ describe('trace id', () => {
       );
       expect(echoed).toEqual(ids);
     });
+
+    test('HTTP 成功与失败均记录状态、错误和耗时', async () => {
+      const server = await createAutorouterServer({
+        env: {SERVER_HOST: '127.0.0.1', SERVER_PORT: '0'},
+        logger: createSilentLogger(),
+      });
+      autorouter = server;
+      const entries: {operation: string; details?: Record<string, unknown>}[] = [];
+      const originalLog = server.operationLogger.log.bind(server.operationLogger);
+      server.operationLogger.log = (operation, details) => {
+        entries.push({operation, details});
+        originalLog(operation, details);
+      };
+
+      const ok = await fetch(`${server.origin}/api/capabilities`);
+      const missing = await fetch(`${server.origin}/missing`);
+
+      expect(ok.status).toBe(200);
+      expect(missing.status).toBe(404);
+      expect(entries.map(entry => entry.operation)).toEqual([
+        'http:request', 'http:response', 'http:request', 'http:response',
+      ]);
+      expect(entries[1]?.details).toMatchObject({
+        status: 200,
+        durationMs: expect.any(Number),
+      });
+      expect(entries[3]?.details).toMatchObject({
+        status: 404,
+        error: 'Route not found: GET /missing',
+        durationMs: expect.any(Number),
+      });
+    });
   });
 });

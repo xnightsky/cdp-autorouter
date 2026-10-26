@@ -37,6 +37,8 @@ export async function dispatchHttp(
   res.setHeader(TRACE_ID_HEADER, traceId);
 
   return await runWithTraceId(traceId, async () => {
+    const startedAt = Date.now();
+    let responseError: string | undefined;
     ctx.operationLogger.log('http:request', {method, path});
     try {
       for (const route of routes) {
@@ -48,20 +50,31 @@ export async function dispatchHttp(
         return;
       }
       // No route matched
+      responseError = `Route not found: ${method} ${path}`;
       ctx.logger.warn('route not found', {method, path});
       res.statusCode = 404;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({error: `Route not found: ${method} ${path}`}));
+      res.end(JSON.stringify({error: responseError}));
     } catch (err: unknown) {
       // HttpError 携带明确状态码，其余归 500——保留 503/500 语义精度
       const status = err instanceof HttpError ? err.statusCode : 500;
       const message = err instanceof Error ? err.message : String(err);
+      responseError = message;
       ctx.logger.error('internal error', {path, status, error: message});
       if (!res.headersSent) {
         res.statusCode = status;
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify({error: message}));
       }
+    } finally {
+      // 统一结果出口覆盖 return 与异常分支，保留 request 审计并补齐排障所需的结果维度。
+      ctx.operationLogger.log('http:response', {
+        method,
+        path,
+        status: res.statusCode,
+        durationMs: Date.now() - startedAt,
+        ...(responseError ? {error: responseError} : {}),
+      });
     }
   });
 }

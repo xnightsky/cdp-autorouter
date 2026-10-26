@@ -136,6 +136,15 @@ async function main(): Promise<void> {
   // 每次 CLI 调用生成一个 traceId：注入所有 HTTP 请求（x-trace-id），
   // 并写入 cli:command/cli:result，与 server 侧日志按同一 id 串联。
   const traceId = newTraceId();
+  const startedAt = Date.now();
+  let resultStatus: number | undefined;
+  let resultError: string | undefined;
+  const fail = (message: string, status?: number) => {
+    resultStatus = status;
+    resultError = message;
+    printError(message);
+    process.exitCode = 1;
+  };
 
   try {
     const args = process.argv.slice(2);
@@ -205,7 +214,7 @@ async function main(): Promise<void> {
   switch (command) {
     case 'list': {
       const res = await api.listInstances(baseUrl, traceId);
-      if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
+      if (!res.ok) { fail(res.error!, res.status); return; }
       if (jsonMode) { printJson(res.data); return; }
       const items = Array.isArray(res.data) ? res.data : [];
       if (items.length === 0) { process.stdout.write('No instances\n'); return; }
@@ -229,7 +238,7 @@ async function main(): Promise<void> {
       if (browserUrl) body.browserUrl = browserUrl;
       if (wsEndpoint) body.wsEndpoint = wsEndpoint;
       const res = await api.createInstance(baseUrl, body as Parameters<typeof api.createInstance>[1], traceId);
-      if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
+      if (!res.ok) { fail(res.error!, res.status); return; }
       if (jsonMode) { printJson(res.data); return; }
       process.stdout.write(`Created instance "${id}" (mode=${mode})\n`);
       return;
@@ -239,7 +248,7 @@ async function main(): Promise<void> {
       const id = args[0];
       if (!id) { printError('Usage: start <id>'); process.exitCode = 1; return; }
       const res = await api.startInstance(baseUrl, id, traceId);
-      if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
+      if (!res.ok) { fail(res.error!, res.status); return; }
       if (jsonMode) { printJson(res.data); return; }
       process.stdout.write(`Started instance "${id}"\n`);
       return;
@@ -249,7 +258,7 @@ async function main(): Promise<void> {
       const id = args[0];
       if (!id) { printError('Usage: stop <id>'); process.exitCode = 1; return; }
       const res = await api.stopInstance(baseUrl, id, traceId);
-      if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
+      if (!res.ok) { fail(res.error!, res.status); return; }
       if (jsonMode) { printJson(res.data); return; }
       process.stdout.write(`Stopped instance "${id}"\n`);
       return;
@@ -259,7 +268,7 @@ async function main(): Promise<void> {
       const id = args[0];
       if (!id) { printError('Usage: restart <id>'); process.exitCode = 1; return; }
       const res = await api.restartInstance(baseUrl, id, traceId);
-      if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
+      if (!res.ok) { fail(res.error!, res.status); return; }
       if (jsonMode) { printJson(res.data); return; }
       process.stdout.write(`Restarted instance "${id}"\n`);
       return;
@@ -269,7 +278,7 @@ async function main(): Promise<void> {
       const id = args[0];
       if (!id) { printError('Usage: switch <id>'); process.exitCode = 1; return; }
       const res = await api.switchInstance(baseUrl, id, traceId);
-      if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
+      if (!res.ok) { fail(res.error!, res.status); return; }
       if (jsonMode) { printJson(res.data); return; }
       process.stdout.write(`Switched default to "${id}"\n`);
       return;
@@ -279,7 +288,7 @@ async function main(): Promise<void> {
       const id = args[0];
       if (!id) { printError('Usage: status <id>'); process.exitCode = 1; return; }
       const res = await api.getInstanceStatus(baseUrl, id, traceId);
-      if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
+      if (!res.ok) { fail(res.error!, res.status); return; }
       if (jsonMode) { printJson(res.data); return; }
       const d = res.data as Record<string, unknown>;
       for (const [k, v] of Object.entries(d)) {
@@ -292,7 +301,7 @@ async function main(): Promise<void> {
       const id = args[0];
       if (!id) { printError('Usage: delete <id>'); process.exitCode = 1; return; }
       const res = await api.deleteInstance(baseUrl, id, traceId);
-      if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
+      if (!res.ok) { fail(res.error!, res.status); return; }
       if (jsonMode) { printJson(res.data); return; }
       process.stdout.write(`Deleted instance "${id}"\n`);
       return;
@@ -301,7 +310,7 @@ async function main(): Promise<void> {
     case 'get-ws': {
       const id = args[0]; // 位置参数可选：省略 = 取默认实例（server 侧 switch 决定谁是默认）
       const res = await api.getWsEndpoint(baseUrl, id, traceId);
-      if (!res.ok) { printError(res.error!); process.exitCode = 1; return; }
+      if (!res.ok) { fail(res.error!, res.status); return; }
       // 输出契约：stdout 恒为单行 ws:// 地址、无任何装饰——这是给
       // `agent-browser --cdp $(cdp-autorouter-cli get-ws <id>)` 之类 $() 内联消费设计的，
       // 加任何前缀/颜色都会破坏下游。错误一律走 stderr（见 printError）。
@@ -315,12 +324,15 @@ async function main(): Promise<void> {
       process.exitCode = 1;
   }
   } finally {
-    // 在命令处理结束后记录一次结果，包含进程退出码（0 表示成功，非 0 表示失败）。
+    // 统一保留 command/result 审计；API 失败补原始状态与错误，避免只剩 exitCode 无法定位。
     operationLogger.log('cli:result', {
       command: command ?? 'unknown',
       baseUrl,
       traceId,
       exitCode: process.exitCode ?? 0,
+      durationMs: Date.now() - startedAt,
+      ...(resultStatus !== undefined ? {status: resultStatus} : {}),
+      ...(resultError ? {error: resultError} : {}),
     });
     await operationLogger.destroy();
   }

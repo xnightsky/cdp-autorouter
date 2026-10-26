@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
@@ -188,6 +189,51 @@ describe('CLI 本地命令', () => {
       expect(entries.every(entry => entry.command === '--version')).toBe(true);
       expect(entries[1]?.exitCode).toBe(0);
     } finally {
+      fs.rmSync(logDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('CLI 结果审计', () => {
+  test('HTTP 失败时 cli:result 记录状态、错误和耗时', async () => {
+    const downstream = http.createServer((req, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'instance missing' }));
+    });
+    await new Promise<void>(resolve => downstream.listen(0, '127.0.0.1', resolve));
+    const address = downstream.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server address');
+    const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-result-log-'));
+
+    try {
+      const { spawn } = await import('node:child_process');
+      const child = spawn(process.execPath, [
+        '--import',
+        'tsx',
+        path.resolve('src/cli/autorouter-cli.ts'),
+        '--port',
+        String(address.port),
+        'get-ws',
+        'missing',
+      ], {
+        env: { ...process.env, LOG_OPERATIONS_ENABLED: 'true', LOG_DIR: logDir },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const exitCode = await new Promise<number | null>(resolve => child.once('close', resolve));
+      const entries = fs.readFileSync(path.join(logDir, 'cli-operations.log'), 'utf8')
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as { operation: string });
+
+      expect(exitCode).toBe(1);
+      expect(entries.map(entry => entry.operation)).toEqual(['cli:command', 'cli:result']);
+      expect(entries[1]).toMatchObject({
+        status: 404,
+        error: 'instance missing',
+        durationMs: expect.any(Number),
+      });
+    } finally {
+      await new Promise<void>(resolve => downstream.close(() => resolve()));
       fs.rmSync(logDir, { recursive: true, force: true });
     }
   });
